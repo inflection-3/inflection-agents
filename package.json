@@ -1,0 +1,42 @@
+{
+  "name": "inflection-agents",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "stripe": "tsx src/agents/stripe-agent.ts",
+    "x402": "tsx src/agents/x402-agent.ts",
+    "coinbase": "tsx src/agents/coinbase-agent.ts",
+    "braintree": "tsx src/agents/braintree-agent.ts",
+    "square": "tsx src/agents/square-agent.ts",
+    "circle": "tsx src/agents/circle-agent.ts",
+    "razorpay": "tsx src/agents/razorpay-agent.ts",
+    "google-pay": "tsx src/agents/google-pay-agent.ts",
+    "x402:server": "tsx src/x402-server.ts",
+    "run": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.2.12",
+    "@circle-fin/user-controlled-wallets": "^10.3.1",
+    "@coinbase/agentkit": "^0.4.0",
+    "@coinbase/agentkit-vercel-ai-sdk": "^0.1.0",
+    "@types/express": "^5.0.6",
+    "ai": "^4.3.16",
+    "axios": "^1.7.9",
+    "braintree": "^3.23.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "razorpay": "^2.9.5",
+    "square": "^42.1.0",
+    "stripe": "^17.7.0",
+    "viem": "^2.21.58",
+    "x402-axios": "^0.4.0",
+    "x402-express": "^1.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.13.5",
+    "@types/braintree": "^3.4.4"
+  }
+}
