@@ -52,3 +52,11 @@ coverage/
 *.pfx
 secrets/
 vault-token
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.db-journal
