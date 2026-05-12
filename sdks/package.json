@@ -1,0 +1,61 @@
+{
+	"name": "sdks",
+	"version": "0.1.0",
+	"description": "a payments sdk for ai agents",
+	"homepage": "https://github.com/inflection-3/inflection-agents#readme",
+	"bugs": {
+		"url": "https://github.com/inflection-3/inflection-agents/issues"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/inflection-3/inflection-agents.git"
+	},
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "bunup",
+		"dev": "bunup --watch",
+		"format": "oxfmt",
+		"lint": "oxlint",
+		"prepare": "bun simple-git-hooks",
+		"release": "bumpp --commit --push --tag",
+		"test": "bun test",
+		"test:coverage": "bun test --coverage",
+		"test:watch": "bun test --watch",
+		"type-check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.13",
+		"bumpp": "^11.1.0",
+		"bunup": "^0.16.31",
+		"oxfmt": "^0.49.0",
+		"oxlint": "^1.64.0",
+		"simple-git-hooks": "^2.13.1",
+		"typescript": "^6.0.3"
+	},
+	"peerDependencies": {
+		"typescript": ">=4.5.0"
+	},
+	"peerDependenciesMeta": {
+		"typescript": {
+			"optional": true
+		}
+	},
+	"simple-git-hooks": {
+		"pre-commit": "bun run lint && bun run type-check"
+	}
+}
