@@ -1,4 +1,4 @@
-# Inflection — Market Positioning Document
+# Inflection — Positioning Document
 
 _Last updated: 2026-05-12_
 
@@ -14,90 +14,116 @@ _Last updated: 2026-05-12_
 
 Twilio for SMS. Stripe for payments. **Inflection for AI agents.**
 
-Companies don't want to manage agent runtimes any more than telcos wanted to manage SMS infrastructure. Inflection is the infrastructure layer — companies plug in their skills and connectors, and their end users get AI agents.
+Companies don't want to manage agent runtimes any more than telcos wanted to manage SMS infrastructure. Inflection is the infrastructure layer — companies plug in their APIs as connectors, write skill definitions, and their end users get real AI agents that take real actions. The hard parts — credential vaulting, audit logs, guardrail enforcement, human approvals — are handled by the runtime, not the company's engineering team.
 
 ---
 
-## The Market Gap
+## The Problem We Solve
 
-No platform today simultaneously offers:
-- Managed runtime infrastructure
-- Financial compliance layer (audit trails, explainability, human-in-the-loop)
-- Embeddable end-user experience (B2B2C)
+Financial services companies know their customers want AI-powered automation. A user should be able to say _"send me my account balance every morning"_ or _"find a cheaper subscription plan and switch me"_ — and have it actually happen.
 
-Today's options:
-| Path | Cost | Time |
-|---|---|---|
-| Build on LangChain / Bedrock | $2M+ engineering | 12–18 months |
-| Salesforce Agentforce FSC | $150/user/month + $2–5/conversation | Locked to Salesforce stack |
-| Zapier / Relevance AI | Cheap | No compliance, no embedding |
-| **Inflection** | Pay-per-execution | Weeks to ship |
+But building the agent runtime to support this is a 12–18 month engineering project before shipping anything:
+
+- **Credential management** — every API call needs secrets; storing and rotating them safely at scale is a security project on its own
+- **Audit requirements** — every agent action must be logged, tamper-proof, and exportable to a SIEM; regulators don't accept "we think it worked"
+- **Guardrail enforcement** — hard limits on what agents can do, not soft prompts
+- **Human approval flows** — high-risk actions (move money, book, cancel) need a human in the loop before they fire
+- **End-user trust** — users need to see exactly what their agent did, step by step, and be able to roll it back
+
+Most companies can't build all of this. The ones that try spend 18 months on infrastructure before they ship a single agent.
 
 ---
 
-## Who We Target (ICP)
+## What We Do
 
-**Primary:** Mid-tier fintechs, embedded finance companies, neobanks in emerging markets.
-- Engineering-capable but not engineering-heavy
-- Want to ship customer-facing AI agents
-- Can't afford 18 months of runtime engineering
-- Too small for Salesforce to care about them
+Inflection is the runtime layer that handles everything between a company's APIs and their end users' intent.
 
-**Secondary:** Larger neobanks that want a fast internal prototype before deciding to build vs. buy.
+### For the company (platform customer)
+
+| What they need | What Inflection provides |
+|---|---|
+| Connect existing APIs | Connectors — OAuth, API key, or mTLS; credentials in HashiCorp Vault |
+| Define what agents can do | Skills — markdown definitions per connector |
+| Control what users can do | Guardrails — allowlists, rate limits, budget caps, approval requirements |
+| Embed in their product | White-labeled chat component — one script tag, fully themed |
+| Prove what happened | Immutable audit log — every step, PII redacted, signed, exportable |
+
+### For the end user (company's customer)
+
+- Create agents in plain English — no configuration UI, no dropdowns
+- Watch agents run step-by-step in real time via streaming
+- Approve or reject high-risk actions before they execute
+- Roll back to a previous agent version if something breaks
+- Trust the company has full visibility into everything their agent did
+
+---
+
+## Who It's For
+
+**Primary buyer:** Engineering and product leaders at neobanks, fintechs, and embedded finance companies — 50 to 500 person engineering teams.
+
+They have real APIs, customers who want automation, compliance teams who will kill anything that isn't auditable, and no appetite to build this runtime themselves.
+
+**Secondary buyer:** Larger banks and financial institutions looking to add AI agent capabilities to existing products without rebuilding their infrastructure.
 
 **Avoid (for now):** Nubank, Revolut, Robinhood — engineering-heavy, already building in-house.
 
 ---
 
-## What We Sell
+## What We Are Not
 
-**To CTOs / Engineering leads:**
-Infrastructure. Managed runtime, pre-built financial connectors, compliance baked in. Call our API or embed our UI. Ship in weeks.
-
-**To CPOs / Product leads:**
-Speed. Your customers get an AI agent experience without your team building the runtime.
-
-**To Compliance officers:**
-Control. Full audit trails, explainability, human-in-the-loop escalations, data residency options. You define what agents can and cannot do.
+- **Not an AI assistant** — we don't answer questions; we execute tasks
+- **Not a chatbot builder** — we don't handle support tickets or FAQs
+- **Not a general-purpose agent platform** — purpose-built for financial services companies with real API infrastructure and compliance requirements
+- **Not a BaaS** — we don't provide banking APIs; we connect to the APIs the company already has
 
 ---
 
-## Pricing Model
+## The Core Differentiator
 
-Stripe-style: **pay-per-execution**.
-- Per conversation / per agent action
-- No per-seat tax on the company's customer base
-- Platform fee for access to premium connectors
-- Enterprise: flat monthly + overage
+Most agent platforms hand you an LLM and tell you to figure out the rest.
+
+Inflection gives you the **runtime**: credential vault, guardrail enforcement, audit log, human-in-the-loop, scheduled execution, kill switch, version history, PII redaction — all wired together and working before you write a line of code.
+
+A company can go from first connector to their first end user running a real agent in **under one week**.
 
 ---
 
 ## Competitive Landscape
 
-| Competitor | Threat Level | Gap We Exploit |
-|---|---|---|
-| AWS Bedrock AgentCore | High (12–18mo window) | Requires heavy engineering; no end-user UI; no FS compliance layer |
-| Salesforce Agentforce FSC | Medium | Prohibitively expensive; Salesforce lock-in; not embeddable |
-| Microsoft Copilot Studio | Medium | Microsoft stack only; no white-label; compliance incomplete |
-| Uptiq.ai | High (closest analog) | Internal workflow focus; not a B2B2C runtime; no API model |
-| LangChain / LangGraph | Low (different category) | Framework, not platform; every company re-solves the same problems |
-| Zapier / Relevance AI | Low | No compliance, no FS domain knowledge, not embeddable |
+| | Inflection | AWS Bedrock AgentCore | Salesforce Agentforce | LangChain / DIY |
+|---|---|---|---|---|
+| Financial services focus | Yes | No | Partial | No |
+| Credential vault built-in | Yes | No | No | Build it |
+| Tamper-proof audit log | Yes | No | Partial | Build it |
+| Guardrail enforcement | Yes | Partial | Partial | Build it |
+| Human-in-the-loop | Yes | DIY | Partial | Build it |
+| Embeddable white-label UI | Yes | No | No | Build it |
+| Time to first agent | < 1 week | Weeks–months | Months | 12–18 months |
+| Threat level | — | High (12–18mo window) | Medium | Low (different category) |
+
+---
+
+## The Moats
+
+1. **Compliance by default** — audit trails, explainability, and HITL baked into the runtime from day one; competitors built on generic infra have to retrofit this
+2. **Financial connector library** — pre-built integrations to Plaid, Stripe, core banking (Temenos, FIS, Fiserv), KYC/AML; compounds with every new connector
+3. **B2B2C runtime model** — the ability to embed agent experiences into a company's branded product is not something hyperscalers optimize for
+4. **Network effects** — every new skill/connector added benefits all tenants; every new tenant adds signal to the runtime
+
+---
+
+## Pricing Model
+
+- **Starter** — annual contract, self-serve onboarding, marketplace connectors, all base features
+- **Enterprise** — annual contract, dedicated onboarding, custom data residency (EU, APAC), SIEM export, SLA, SSO
+
+Pricing is per workspace, not per execution or per seat. Companies know their cost upfront.
 
 ---
 
 ## The 3 Risks to Validate
 
-1. **Hyperscalers move into vertical FS** — ~12 month window before AWS/Google ship "Bedrock AgentCore for Financial Services." Need to build connector depth they can't replicate fast.
-
-2. **Big neobanks build vs. buy** — ICP is mid-tier, not giants. Validate with 3–5 target customers in 90-day pilot: "Would you have spent 12+ months building this without Inflection?"
-
-3. **Regulatory liability can't be abstracted** — Map what Inflection can own vs. what the fintech must own before going to market. Run by a compliance lawyer at 3 target banks.
-
----
-
-## The Moats (How We Stay Defensible)
-
-1. **Compliance by default** — Audit trails, explainability, HITL baked into the runtime. Competitors built on generic infra have to add this later.
-2. **Financial connector library** — Pre-built integrations to Plaid, Stripe, core banking (Temenos, FIS, Fiserv), KYC/AML providers. Compounds over time.
-3. **B2B2C runtime model** — The ability to embed agent experiences into a company's branded product is not something hyperscalers optimize for.
-4. **Network effects** — Every new skill/connector added benefits all tenants; every new tenant adds signal to the runtime.
+1. **Hyperscalers enter vertical FS** — ~12 month window before AWS/Google ship "Bedrock AgentCore for Financial Services." Need connector depth they can't replicate fast.
+2. **Big neobanks build vs. buy** — ICP is mid-tier, not giants. Validate with 3–5 target customers: "Would you have spent 12+ months building this without Inflection?"
+3. **Regulatory liability scope** — Map what Inflection can own vs. what the fintech must own before going to market. Run by a compliance lawyer at 3 target banks.

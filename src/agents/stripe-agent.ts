@@ -36,17 +36,14 @@ export async function setupTestCustomer() {
     },
   });
 
-  const pm = await stripe.paymentMethods.create({
-    type: "card",
-    card: { number: "4242424242424242", exp_month: 12, exp_year: 2030, cvc: "123" },
-  });
+  const pmId = "pm_card_visa";
 
-  await stripe.paymentMethods.attach(pm.id, { customer: customer.id });
+  const attachedPm = await stripe.paymentMethods.attach(pmId, { customer: customer.id });
   await stripe.customers.update(customer.id, {
-    invoice_settings: { default_payment_method: pm.id },
+    invoice_settings: { default_payment_method: attachedPm.id },
   });
 
-  return { customerId: customer.id, paymentMethodId: pm.id };
+  return { customerId: customer.id, paymentMethodId: attachedPm.id };
 }
 
 // ── Agent ──────────────────────────────────────────────────────────────────────
