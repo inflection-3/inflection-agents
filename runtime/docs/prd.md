@@ -567,3 +567,675 @@ Phase 3 additions (not MVP):
 - Token usage by model
 - Failure breakdown by node type
 - Evaluator / quality scoring
+
+---
+
+## 12. Dashboard — Page Reference
+
+### Overview
+
+The Inflection dashboard is the web application companies use to build, manage, and observe their deployed agents. Navigation is a left sidebar with the following top-level items:
+
+```
+Home
+Flows
+Connectors
+Knowledge Bases       (Phase 3)
+Approvals
+Analytics
+Manager View          (Phase 3)
+Evaluator             (Phase 3)
+Audit Logs
+Settings
+  └── Team
+  └── Guardrails
+  └── API Keys
+  └── Billing
+  └── Integrations
+```
+
+---
+
+### Home (`/`)
+
+**Purpose:** Single-glance health check. First page seen on login.
+
+**Data shown:**
+- **5 stat cards (last 7 days):**
+  - Total Executions (delta vs. prior 7d, ↑ or ↓ badge)
+  - Success Rate (% and absolute count failed)
+  - Pending Approvals (count — links to `/approvals`)
+  - Active Personal Agents (Mode B agents across all end users)
+  - Estimated LLM Cost (USD, last 7d)
+- **Execution sparkline** — 7-day daily bar chart, stacked: completed / failed / cancelled
+- **Recent activity feed** — last 20 events across all flows: execution started, approval requested, kill switch toggled, connector revoked, new flow published. Each row shows: event type icon, description, who triggered it, how long ago. Click → detail.
+- **Kill switch banner** — if any kill switch is ON, a full-width red banner shows at top with the affected agent name and a "Turn Off" button
+- **Pending approvals callout** — if there are pending approvals, an amber card shows count + "Review Now" link
+- **Quick actions:**
+  - New Flow
+  - Add Connector
+  - Invite Team Member
+
+---
+
+### Flows (`/flows`)
+
+**Purpose:** Browse, manage, and publish all flows for this workspace.
+
+**Data shown:**
+
+**Flow list (table):**
+| Column | Description |
+|---|---|
+| Name | Flow name, clickable → opens canvas |
+| Status badge | Draft / Dev / Staging / Production |
+| Last published | Relative timestamp of last promotion to production |
+| Last edited | Relative timestamp + "by [user]" |
+| Executions (24h) | Run count badge (last 24 hours) |
+| Success rate (24h) | % success, colored: green ≥95%, yellow 80–95%, red <80% |
+| Created by | Avatar + name |
+| Actions | Edit, Duplicate, Archive (kebab menu) |
+
+**Filters:** status (All / Draft / Dev / Staging / Production / Archived), created by, search by name.
+
+---
+
+### Flow Editor (`/flows/:flowId`)
+
+**Purpose:** The visual canvas where company builders author, test, and publish agent flows. This is the primary creation surface — the Stack AI-equivalent canvas.
+
+**Layout (3-panel):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Toolbar (top bar)                                              │
+├───────────────┬─────────────────────────────────┬──────────────┤
+│               │                                 │              │
+│  Node Sidebar │         Canvas (center)         │  Inspector   │
+│  (left, 260px)│         (fills remaining)       │  (right,     │
+│               │                                 │   320px)     │
+│               │                                 │              │
+└───────────────┴─────────────────────────────────┴──────────────┘
+```
+
+---
+
+**Toolbar (top bar)**
+
+Left side:
+- Flow name (editable inline — click to rename, blur to save)
+- Stage badge — Draft / Dev / Staging / Production (color-coded)
+- Unsaved changes dot (gray dot appears when there are uncommitted edits)
+
+Center:
+- Undo (Cmd+Z) and Redo (Cmd+Y) buttons with keyboard shortcut tooltips
+- Auto-layout button (Dagre, left-to-right arrangement)
+- Fit view button (zoom to fit all nodes)
+- Grid toggle (show/hide snap grid)
+- Zoom level display (e.g., "85%") with +/− buttons
+
+Right side:
+- **Test Run** button — runs the full flow in sandbox with a sample input; opens the Execution Detail drawer inline
+- **Save** button (Cmd+S) — saves current draft; shows "Saved" confirmation for 2 seconds
+- **Promote** dropdown → options depend on current stage:
+  - Draft → "Promote to Dev"
+  - Dev → "Promote to Staging"
+  - Staging → "Promote to Production" (requires diff review modal)
+- **Version History** button → opens right drawer
+- **Flow settings** (gear icon) → name, description, kill switch toggle for this flow
+
+---
+
+**Node Sidebar (left panel)**
+
+Top: search input — filters all node types and connector actions by name.
+
+Sections (collapsible):
+
+| Section | Nodes |
+|---|---|
+| **Your Connectors** | One entry per custom connector the workspace has imported. Expandable — shows each enabled action as a draggable chip. |
+| **Flow Control** | Input, Output, If/Else (MVP); Loop, AI Routing, Merge, Delay (Phase 2) |
+| **AI** | LLM Node (MVP); Knowledge Base (Phase 2) |
+| **Memory** | Memory Node, Variable Node |
+| **HITL** | HITL Node |
+| **Native Connectors** | Plaid, Stripe, HTTP Request (MVP); financial, ERP, calendar, communication (Phase 2) |
+| **Code** | Code Node — Python or TypeScript inline (Phase 2) |
+| **Subflow** | Call another published flow as a sub-agent (Phase 2) |
+
+Each node entry:
+- Icon (colored by category) + name
+- Subtitle (connector name for connector actions)
+- Drag from sidebar → drop on canvas to instantiate
+
+When a connector is not yet connected (no credentials saved), its nodes show a lock icon. Dragging one prompts: "Connect [ConnectorName] first — Add credentials."
+
+---
+
+**Canvas (center)**
+
+The infinite 2D workspace where builders compose flows by placing and wiring nodes.
+
+**Canvas interaction:**
+- Pan: click and drag on empty canvas
+- Zoom: scroll wheel or pinch on trackpad
+- Select node: click (highlights node, opens Inspector)
+- Multi-select: shift+click or drag selection box
+- Move node: drag selected node
+- Delete node: select + Backspace/Delete
+- Duplicate node: Cmd+D
+- Copy/paste: Cmd+C / Cmd+V (preserves node config)
+- Minimap: bottom-right corner — shows full flow layout, click to jump
+
+**Node anatomy (on canvas):**
+
+```
+┌──────────────────────────────────┐
+│  ●  Plaid — getBalance           │  ← header: icon + connector + action
+│  ─────────────────────────────── │
+│  account_id: {{input.accountId}} │  ← config preview (first 2 fields)
+│  ...                             │
+├──────────────────────────────────┤
+│  ○ output ────────────────────── │  ← output port (right)
+└──────────────────────────────────┘
+    ────────────── ○ input           ← input port (left)
+```
+
+- Status ring on node header: gray (not run), green (last test passed), red (last test failed), yellow (running)
+- Port colors match data type: string=blue, number=green, boolean=yellow, object=purple, any=gray
+- Connecting: drag from output port → hover over input port → release to connect
+- Invalid connection: port turns red with tooltip explaining type mismatch (warning, not blocked in MVP)
+- Edge: drawn as a bezier curve; click edge to highlight, press Delete to remove
+- Edge label (hover): shows the data type flowing through that wire
+
+**Node status indicators (during test runs):**
+- Pulse animation on the running node's border
+- Checkmark overlay on completion
+- X overlay on failure with red border
+- Token stream appears below LLM nodes during generation (word by word)
+
+---
+
+**Node Inspector (right panel)**
+
+Opens when a node is selected. Closes when clicking empty canvas.
+
+**Inspector tabs:**
+
+| Tab | Content |
+|---|---|
+| **Config** | The node's configuration form (default tab) |
+| **Test** | Run this node in isolation with sample data |
+| **Docs** | Reference docs for this node type / connector action |
+
+**Config tab — common fields across all nodes:**
+- Node display name (editable — shown on the canvas header)
+- Node description (optional — shown in Mode B palette if node is exposed to end users)
+
+**Config tab — per node type:**
+
+*LLM Node:*
+- Model selector (Claude Sonnet 4.6 / Claude Opus 4.7 / GPT-4o / Gemini 2.0 Flash / custom)
+- API key (select from saved keys or enter inline)
+- System prompt (multi-line code editor with `{{variable}}` syntax highlighting)
+- Temperature (0–2 slider)
+- Max tokens (number input)
+- Output format: Text / JSON (with JSON schema editor when JSON selected)
+- Streaming: on/off toggle
+
+*Connector Node (e.g., Plaid — getBalance):*
+- Connector selector (pre-set to the node's connector, change to swap)
+- Action selector (pre-set, change to swap action)
+- Per-parameter inputs: each shows the parameter name, type badge, required indicator, and an input field that accepts literal values or `{{variable}}` references
+- "Map from upstream node" — click any field → dropdown of all upstream node output paths
+
+*If/Else Node:*
+- Condition builder: left operand (variable picker) + operator (equals, contains, greater than, etc.) + right operand (literal or variable)
+- Add condition row (AND / OR)
+- True branch label + False branch label (editable)
+
+*HITL Node:*
+- Approval message template (what reviewers see)
+- Timeout: duration input + on-timeout policy (cancel / auto-approve / escalate)
+- Notification channels: Email (recipient list) / Slack channel / Dashboard only
+- Outputs: `approved` (boolean), `reviewer_note` (string), `reviewer_id` (string)
+
+*Input Node:*
+- Input schema: add fields (name, type, required, description)
+- Each field becomes an output port on the node
+- Sample data (JSON editor) — used during test runs when no real trigger exists
+
+*Output Node:*
+- Output format: plain text / JSON / markdown
+- Map output fields from upstream nodes (drag-and-drop field mapping or `{{variable}}` syntax)
+
+*Memory Node:*
+- Operation: Read / Write / Delete
+- Scope: user / agent / workspace
+- Key: string or `{{variable}}` interpolated key
+- TTL (Write only): duration in seconds, or blank for no expiry
+
+**Test tab:**
+- Sample input JSON editor (pre-populated from Input Node schema)
+- "Run this node" button — executes just this node in isolation using connected credentials
+- Output panel: raw JSON response, formatted; token usage for LLM nodes; duration
+- Error panel (if failed): error type, message, stack trace (dev mode only)
+
+**Docs tab:**
+- Connector: action description, all parameters with types and descriptions, example response JSON
+- LLM node: link to model provider docs
+- Logic nodes: plain-English explanation of behavior + example
+
+---
+
+**Version History (right drawer — toggled from toolbar)**
+
+- List of all `FlowVersion` records for this flow
+- Each entry:
+  - Version number (v1, v2, v3…)
+  - Stage it was promoted to (Dev / Staging / Production)
+  - Promoted by (avatar + name)
+  - Timestamp
+  - Commit message (editable at promote time)
+  - "View diff" → opens diff modal (changed / added / removed nodes shown side-by-side)
+  - "Restore this version" → creates a new draft from this version's node graph
+- Current production version: highlighted with a green "LIVE" badge
+- Current working draft: shown at top with "Unsaved changes" count if dirty
+
+---
+
+**Promote to Production modal**
+
+Triggered by "Promote to Production" in the toolbar dropdown. Requires a staged version.
+
+**Modal content:**
+- Diff summary: N nodes changed, M nodes added, P nodes removed
+- Diff detail: expandable list per changed node — what config fields changed and how
+- "What's changed" text field (required commit message)
+- Checklist (auto-validated before enabling confirm button):
+  - ☐ At least one Input node present
+  - ☐ At least one Output node present
+  - ☐ No disconnected nodes (nodes with unwired required ports)
+  - ☐ All required connector credentials are connected
+- Confirm button: "Publish to Production"
+- On confirm: new `FlowVersion` created, stage set to production, prior production version archived
+
+---
+
+**Flow Settings modal (gear icon)**
+
+- Flow name
+- Flow description
+- Kill switch toggle — when ON, all executions of this flow are immediately blocked; dashboard shows red banner
+- Mode B exposure — toggle: "Allow end users to create personal agents from this flow" (adds flow to the Mode B palette)
+- If Mode B exposed: palette description (plain English — LLM uses this for intent parsing; bad description = bad matching)
+- Delete flow (danger zone) — requires typing flow name to confirm; only available to Admins
+
+---
+
+### Connectors (`/connectors`)
+
+**Purpose:** Manage all authenticated API connections the workspace uses.
+
+**Data shown:**
+
+Two tabs: **Native Connectors** and **Your Connectors** (custom)
+
+**Native connectors tab (table):**
+| Column | Description |
+|---|---|
+| Connector | Icon + name (Plaid, Stripe, etc.) |
+| Status | Connected / Error / Revoked |
+| Credential | Masked value (e.g., `sk_live_****abcd`) |
+| Last tested | Relative timestamp + pass/fail badge |
+| Used in | Count of flows referencing this connector |
+| Actions | Test, Edit credentials, Revoke |
+
+**Your connectors tab (table):**
+| Column | Description |
+|---|---|
+| Connector | Icon (auto or uploaded) + name |
+| Actions | Count of enabled actions |
+| Last synced | For OpenAPI-imported connectors |
+| Status | Active / Partial (some actions failed) / Revoked |
+| Used in | Count of flows referencing this connector |
+| Actions | Re-sync, Edit, View actions, Revoke |
+
+**Connector detail drawer** (click any connector):
+- Auth config summary (masked)
+- Action list — each action shows: name, description, enabled toggle, "end users can access" toggle, "requires approval" toggle, last tested status
+- Per-action test button — runs action with sample data, shows raw response JSON
+
+See Section 2 (Connector Library) and Section 2a (Custom Connector Import) for full authoring requirements.
+
+---
+
+### Approvals (`/approvals`)
+
+**Purpose:** Review and resolve pending HITL approval requests.
+
+**Data shown:**
+
+**Tabs:** Pending (default) | Approved | Rejected | All
+
+**Approval list (table):**
+| Column | Description |
+|---|---|
+| ID | Short approval ID, clickable |
+| Flow | Flow name that triggered the request |
+| Action | Connector + action (e.g., `stripe.createCharge`) |
+| Requested by | End user identifier (external ID or masked email) |
+| Amount | If monetary action (e.g., "$250.00") |
+| Requested | Relative timestamp |
+| Expires | Time remaining until timeout policy fires |
+| Status | Pending / Approved / Rejected / Expired |
+| Reviewer | Who approved/rejected (if resolved) |
+
+**Filters:** flow, date range, action type, requested by.
+
+**Approval detail view** (`/approvals/:approvalId`):
+- Full execution context snapshot (the input values the node received)
+- Action description (plain English: "Charge $250.00 to card ending 4242")
+- End user info: external ID, name if provided in JWT metadata
+- Upstream node outputs (what the flow computed before reaching this HITL node)
+- Timeline: when triggered, which notifications sent, when resolved
+- Approve button (green) + optional note field
+- Reject button (red) + required rejection reason field
+- Execution trace link → jumps to the full execution in Analytics
+
+**Bulk approve** — checkbox selection on list → "Approve selected" (Phase 3)
+
+**Notification badge** — `/approvals` nav item shows live count of pending approvals, updated via WebSocket
+
+---
+
+### Analytics (`/analytics`)
+
+**Purpose:** Understand execution volume, performance, cost, and error patterns.
+
+**Time range selector:** Last 24h / 7d / 30d / 90d / Custom range (applies to all charts)
+
+**Data shown:**
+
+**Summary stat cards (row of 4):**
+| Card | Metric |
+|---|---|
+| Total Executions | Count + sparkline trend |
+| Success Rate | % + count failed |
+| Avg Duration | Median execution time in seconds |
+| Estimated Cost | LLM cost in USD (based on token usage × model pricing) |
+
+**Execution volume chart:**
+- Line chart, daily data points
+- Three series: Completed (green), Failed (red), Cancelled (gray)
+- Tooltip shows exact counts per day per status
+
+**Flow performance table:**
+| Column | Description |
+|---|---|
+| Flow | Flow name |
+| Executions | Run count in period |
+| Success rate | % |
+| Avg duration | Median ms |
+| P95 duration | 95th percentile |
+| Failure count | Clickable → filtered to failed executions for this flow |
+| Est. cost | LLM cost USD |
+
+**Error breakdown:**
+- Horizontal bar chart: execution failures grouped by error type (node timeout, guardrail denied, connector error, budget exceeded, user cancelled)
+- Click bar → execution list filtered to that error type
+
+**Approval metrics:**
+- Average time from request to resolution (hours)
+- Resolution breakdown: pie chart (approved / rejected / expired)
+
+**Phase 3 additions:**
+- Token usage by model (stacked bar: Claude / GPT-4o / Gemini / other)
+- Per-end-user analytics (top users by execution count)
+- Cost per flow (detailed breakdown)
+- Evaluator quality score trend
+
+---
+
+### Execution Detail (`/analytics/executions/:executionId`)
+
+**Purpose:** Full trace of a single execution — every node, every input/output, every timestamp.
+
+**Data shown:**
+
+**Header:**
+- Execution ID, flow name, flow version, trigger type (user_message / scheduled / api_call)
+- Status badge (completed / failed / cancelled / waiting_approval)
+- Start time, end time, total duration
+- End user external ID (if triggered by user message)
+- Links: parent execution (if subflow), Approval request (if HITL triggered)
+
+**Node execution timeline (main panel):**
+- Vertical list of `ExecutionStep` records in execution order
+- Each step shows:
+  - Node type icon + node name
+  - Status badge + duration
+  - Input values (collapsed by default, click to expand)
+  - Output values (collapsed by default, click to expand)
+  - Error message if failed, retry count if retried
+  - Token usage (for LLM nodes: prompt tokens, completion tokens, model used)
+- LLM nodes: "Show prompt" toggle → reveals full prompt sent (guardrail-redacted if PII)
+- Connector nodes: "Show request" toggle → reveals request params (credentials always masked)
+
+**Audit events panel (right sidebar):**
+- List of all `AuditEvent` records for this execution
+- Each event: type, outcome, timestamp, hash (click to verify against chain)
+
+---
+
+### Manager View (`/manager`) — Phase 3
+
+**Purpose:** Company sees every conversation every end user has had with every deployed agent — across Mode A and Mode B.
+
+**Data shown:**
+
+**Conversation list (table):**
+| Column | Description |
+|---|---|
+| User | End user external ID / display name |
+| Agent | Flow name (Mode A) or personal agent name (Mode B) |
+| Mode | A or B badge |
+| Started | Timestamp |
+| Messages | Turn count |
+| Status | Completed / In progress / Failed / Waiting approval |
+| Duration | Total session time |
+
+**Filters:** mode, flow, date range, status, user search.
+
+**Conversation detail:**
+- Full message thread — user messages and agent responses in chronological order
+- Agent responses show which nodes ran (expandable)
+- HITL gaps shown in thread ("Waiting for approval — 4 hours 12 minutes")
+- Execution ID per turn → links to Execution Detail
+
+---
+
+### Evaluator (`/evaluator`) — Phase 3
+
+**Purpose:** Batch-test flows against a dataset of expected inputs/outputs. Measure quality. Compare versions.
+
+**Data shown:**
+
+**Test suites list:**
+- Name, flow it tests, last run date, last run result (pass/fail/partial), dataset size
+
+**Test suite detail:**
+- **Dataset tab** — table of test cases: input, expected output, last actual output, grade (Pass / Fail / Partial)
+- **Runs tab** — history of evaluation runs: when run, flow version tested, pass rate, avg score
+- **Run detail** — per-test-case result: input sent → output received → LLM judge score (0–100) → reasoning
+
+**Run a new evaluation:**
+- Select flow version (defaults to latest production)
+- Select dataset (existing or upload CSV)
+- Select grading method: exact match, LLM judge (uses Claude to compare), regex
+- Run → background job → email when complete
+
+**Version comparison view:**
+- Side-by-side: Version A vs. Version B pass rates per test case
+- Highlighted regressions (cases that pass in A but fail in B)
+
+---
+
+### Audit Logs (`/audit-logs`)
+
+**Purpose:** Immutable compliance record of every state change across all executions.
+
+**Data shown:**
+
+**Filter bar:**
+- Date range picker
+- Execution ID (exact match)
+- End user (external ID search)
+- Event type (multi-select: execution.started, node.completed, guardrail.denied, approval.requested, approval.resolved, kill_switch.toggled, connector.accessed)
+- Outcome (ALLOW / DENY / HOLD)
+
+**Audit log table:**
+| Column | Description |
+|---|---|
+| Timestamp | UTC timestamp, ms precision |
+| Event type | Icon + label |
+| Outcome | ALLOW (green) / DENY (red) / HOLD (yellow) |
+| Execution ID | Clickable → Execution Detail |
+| Actor | End user external ID or system |
+| Description | Plain-English summary of the event |
+| Hash | First 8 chars of row hash, with copy button |
+
+**Row detail view (click row):**
+- Full JSON payload (all fields except PII, which shows `[REDACTED]`)
+- Hash chain fields: `rowHash`, `prevHash`
+- "Verify hash" button — recomputes hash client-side and confirms it matches stored value
+- Chain integrity status for this row
+
+**Export:**
+- "Export CSV" button — exports all rows matching current filter (max 100k rows)
+- Includes all non-PII fields
+
+---
+
+### Settings — Team (`/settings/team`)
+
+**Purpose:** Manage who has access to the workspace and what they can do.
+
+**Data shown:**
+
+**Members table:**
+| Column | Description |
+|---|---|
+| Name | Avatar + display name |
+| Email | |
+| Role | Admin / Editor / Viewer |
+| Last active | Relative timestamp |
+| MFA | Enabled / Not set badge |
+| Actions | Change role, Remove |
+
+**Roles:**
+| Role | Permissions |
+|---|---|
+| Admin | All permissions including billing, team management, kill switch, connector revoke |
+| Editor | Build flows, add connectors, configure guardrails; cannot manage team or billing |
+| Viewer | Read-only — can view flows, analytics, audit logs; cannot edit or publish |
+
+**Invite section:**
+- Email input + role selector + "Send Invite" button
+- Pending invites list with resend / revoke options
+- SSO enforcement toggle (when ON, only SSO login allowed; password login blocked)
+- SCIM provisioning config (Phase 4)
+
+---
+
+### Settings — Guardrails (`/settings/guardrails`)
+
+See Section 3 (Guardrail Configuration) for full requirements. Summary of data shown:
+
+- Action allowlist editor (connector → action tree with enable/disable toggles)
+- Action denylist editor (same tree, always-blocked actions highlighted red)
+- HITL-required actions list (always insert approval gate for these)
+- Rate limit config (max executions / user / day and / user / hour)
+- Budget cap config (max LLM cost USD per execution + on-exceed behavior)
+- Kill switch toggle (with confirmation dialog — shows active execution count before toggling)
+
+---
+
+### Settings — API Keys (`/settings/api-keys`)
+
+**Purpose:** Manage keys for direct API access and embedding.
+
+**Data shown:**
+
+**API keys table:**
+| Column | Description |
+|---|---|
+| Name | Descriptive label set on creation |
+| Key | Masked (e.g., `inf_live_****abcd`) |
+| Created | Date |
+| Last used | Relative timestamp or "Never" |
+| Permissions | Read-only / Read+Write |
+| Actions | Copy key (one-time, shown on creation), Revoke |
+
+**Embed credentials section:**
+- Workspace ID (copyable)
+- Public key (used by SDK to verify company-signed JWTs)
+- "Rotate public key" button (with warning: requires updating all embed deployments)
+- Allowed embed origins list (domains that may load the widget) — add / remove
+
+---
+
+### Settings — Billing (`/settings/billing`)
+
+**Purpose:** View usage, invoices, and manage payment method.
+
+**Data shown:**
+
+**Current billing period card:**
+- Period dates
+- Executions consumed / included in plan
+- Estimated overage charge
+- Next invoice date + estimated amount
+
+**Usage breakdown:**
+- Executions by flow (table)
+- LLM token usage by model
+- Connector call count by connector
+
+**Invoice history table:**
+- Date, period, amount, status (Paid / Due / Failed), PDF download link
+
+**Payment method:**
+- Current card (masked) or bank account
+- Update payment method button
+- Billing email + billing address
+
+---
+
+### Settings — Integrations (`/settings/integrations`)
+
+**Purpose:** Configure workspace-level integrations used for notifications and team workflows (distinct from data connectors, which live in `/connectors`).
+
+**Data shown:**
+
+**Notification integrations:**
+| Integration | What it does |
+|---|---|
+| Email (SendGrid) | Approval request emails, failure alerts, invite emails |
+| Slack | Approval request notifications, kill switch alerts, weekly digest |
+| PagerDuty | On-call alerts for critical execution failures (Phase 3) |
+| Webhook | POST to company's own endpoint on any Inflection event |
+
+Each integration row: status (Connected / Not connected), configure button, test button.
+
+**Slack integration config:**
+- OAuth connect button → installs Inflection app to company Slack
+- Channel selector for approval notifications
+- Channel selector for failure alerts
+- Optional: DM the requester's Slack user directly (if Slack identity matches)
+
+**Webhook config:**
+- Endpoint URL
+- Events to send (multi-select: approval.requested, execution.failed, kill_switch.toggled, etc.)
+- Secret for HMAC signature verification
+- Last 10 delivery attempts (timestamp, status code, response preview)
