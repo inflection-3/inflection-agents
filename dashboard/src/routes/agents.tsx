@@ -1,5 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
-import { useState } from "react"
+import { Link, createFileRoute } from "@tanstack/react-router"
+import { useEffect, useState } from "react"
+import { ClipboardCopy, Copy, MoreHorizontal, Plus, RotateCcw } from "lucide-react"
+import type {Agent} from "@/lib/api";
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,57 +22,79 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { agents } from "@/lib/data"
-import { ClipboardCopy, MoreHorizontal, Plus, Copy, RotateCcw } from "lucide-react"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  
+  createAgent,
+  deleteAgent,
+  fetchAgents,
+  updateAgent
+} from "@/lib/api"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 
 export const Route = createFileRoute("/agents")({ component: AgentsPage })
 
 function AgentsPage() {
-  const [agentList, setAgentList] = useState(agents)
+  const [agentList, setAgentList] = useState<Array<Agent>>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [registerOpen, setRegisterOpen] = useState(false)
-  const [newAgent, setNewAgent] = useState<{ name: string; id: string; apiKey: string } | null>(null)
+  const [newAgent, setNewAgent] = useState<{ name: string; id: string } | null>(null)
 
-  const handleRegister = (e: React.FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    loadAgents()
+  }, [])
+
+  const loadAgents = async () => {
+    try {
+      setLoading(true)
+      const data = await fetchAgents()
+      setAgentList(data)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
     const name = String(form.get("name") || "")
-    const id = "agt_" + Math.random().toString(36).slice(2, 10)
-    const apiKey = "sk_inf_" + Math.random().toString(36).slice(2, 10) + "_live_••••••••••••••••"
-    setNewAgent({ name, id, apiKey })
+    const description = String(form.get("description") || "")
+    try {
+      const agent = await createAgent({ name, description: description || undefined })
+      setNewAgent({ name: agent.name, id: agent.id })
+      setAgentList((prev) => [agent, ...prev])
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
   const finishRegister = () => {
-    if (!newAgent) return
-    setAgentList((prev) => [
-      {
-        id: newAgent.id,
-        name: newAgent.name,
-        status: "active" as const,
-        apiKey: newAgent.apiKey,
-        createdAt: new Date().toISOString().slice(0, 10),
-        lastCallAt: "Never",
-        connectorCount: 0,
-        policyCount: 0,
-        txCount: 0,
-      },
-      ...prev,
-    ])
     setNewAgent(null)
     setRegisterOpen(false)
   }
 
-  const toggleStatus = (id: string) => {
-    setAgentList((prev) =>
-      prev.map((a) => ({
-        ...a,
-        status: a.id === id ? (a.status === "active" ? "inactive" : "active") : a.status,
-      }))
-    )
+  const toggleStatus = async (id: string) => {
+    const agent = agentList.find((a) => a.id === id)
+    if (!agent) return
+    const next = agent.status === "active" ? "suspended" : "active"
+    try {
+      await updateAgent(id, { status: next })
+      setAgentList((prev) => prev.map((a) => (a.id === id ? { ...a, status: next } : a)))
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
-  const removeAgent = (id: string) => {
-    setAgentList((prev) => prev.filter((a) => a.id !== id))
+  const removeAgent = async (id: string) => {
+    try {
+      await deleteAgent(id)
+      setAgentList((prev) => prev.filter((a) => a.id !== id))
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
   return (
@@ -125,13 +149,6 @@ function AgentsPage() {
                       <Copy className="size-3" />
                     </Button>
                   </div>
-                  <div className="text-[10px] text-muted-foreground mt-1">API Key</div>
-                  <div className="flex items-center gap-1.5 font-mono text-xs">
-                    <code>{newAgent.apiKey}</code>
-                    <Button size="icon" variant="ghost" className="size-5" onClick={() => navigator.clipboard.writeText(newAgent.apiKey)}>
-                      <Copy className="size-3" />
-                    </Button>
-                  </div>
                 </div>
                 <DialogFooter>
                   <Button onClick={finishRegister} size="sm">Done</Button>
@@ -142,7 +159,23 @@ function AgentsPage() {
         </Dialog>
       </div>
 
-      {agentList.length === 0 ? (
+      {error && <p className="text-[10px] text-destructive">{error}</p>}
+
+      {loading ? (
+        <div className="flex flex-col gap-2">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardHeader className="pb-1 pt-2 px-3">
+                <Skeleton className="h-4 w-32" />
+              </CardHeader>
+              <CardContent className="px-3 pb-2">
+                <Skeleton className="h-3 w-48 mb-1" />
+                <Skeleton className="h-3 w-32" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : agentList.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-8 gap-2">
           <div className="text-2xl">🤖</div>
           <h2 className="text-sm font-medium">No agents yet</h2>
@@ -171,8 +204,8 @@ function AgentsPage() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => alert("Rename not implemented in demo")}>Rename</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => alert("Regenerate not implemented in demo")}>
+                      <DropdownMenuItem onClick={() => alert("Rename not implemented")}>Rename</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => alert("Regenerate not implemented")}>
                         <RotateCcw className="size-3 mr-1.5" />
                         Regenerate API Key
                       </DropdownMenuItem>
@@ -194,30 +227,16 @@ function AgentsPage() {
                     <Copy className="size-2.5" />
                   </Button>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-muted-foreground">API Key:</span>
-                  <code className="rounded bg-accent px-1.5 py-0.5 font-mono text-[10px]">{agent.apiKey}</code>
-                  <Button size="icon" variant="ghost" className="size-4" onClick={() => navigator.clipboard.writeText(agent.apiKey)}>
-                    <Copy className="size-2.5" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="size-4" onClick={() => alert("Regenerate not implemented in demo")}>
-                    <RotateCcw className="size-2.5" />
-                  </Button>
-                </div>
+                {agent.description && (
+                  <div className="text-muted-foreground text-[10px]">{agent.description}</div>
+                )}
                 <div className="flex items-center gap-3 text-muted-foreground text-[10px]">
-                  <span>Created: {agent.createdAt}</span>
-                  <span>Last call: {agent.lastCallAt}</span>
+                  <span>Created: {new Date(agent.createdAt).toLocaleDateString()}</span>
                 </div>
                 <div className="flex items-center gap-2 pt-0.5">
-                  <Link to="/connectors" className="text-primary hover:underline text-[10px]">
-                    {agent.connectorCount} Connectors
-                  </Link>
-                  <Link to="/policies" className="text-primary hover:underline text-[10px]">
-                    {agent.policyCount} Policies
-                  </Link>
-                  <Link to="/audit-logs" className="text-primary hover:underline text-[10px]">
-                    {agent.txCount.toLocaleString()} Tx
-                  </Link>
+                  <Link to="/connectors" className="text-primary hover:underline text-[10px]">Connectors</Link>
+                  <Link to="/policies" className="text-primary hover:underline text-[10px]">Policies</Link>
+                  <Link to="/audit-logs" className="text-primary hover:underline text-[10px]">Audit Logs</Link>
                 </div>
               </CardContent>
             </Card>

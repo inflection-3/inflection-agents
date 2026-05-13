@@ -293,7 +293,7 @@ This is the critical path. Target: < 10ms gateway overhead p99.
 
 ## Part 3 — Dashboard (Frontend) Integration Plan
 
-Stack: **Next.js** (TypeScript), JWT auth, calls Dashboard API.
+Stack: **react tanstack start* (TypeScript), JWT auth, calls Dashboard API.
 
 ### Phase 8 — Auth & Shell
 

@@ -1,4 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
+import { useEffect, useState } from "react"
+import { Activity, Bot, Clock, DollarSign } from "lucide-react"
+import type {Agent, Approval, AuditLog, Connector} from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -10,18 +13,53 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { recentTransactions, pendingApprovals } from "@/lib/data"
-import { DollarSign, Activity, Clock, Bot } from "lucide-react"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from "@/components/ui/breadcrumb"
+import {     fetchAgents, fetchApprovals, fetchAuditLogs, fetchConnectors } from "@/lib/api"
 
 export const Route = createFileRoute("/")({ component: OverviewPage })
 
 function OverviewPage() {
+  const [agents, setAgents] = useState<Array<Agent>>([])
+  const [, setConnectors] = useState<Array<Connector>>([])
+  const [pendingApprovals, setPendingApprovals] = useState<Array<Approval>>([])
+  const [recentLogs, setRecentLogs] = useState<Array<AuditLog>>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    try {
+      setLoading(true)
+      const [ags, cons, approvals, logs] = await Promise.all([
+        fetchAgents(),
+        fetchConnectors(),
+        fetchApprovals({ status: "pending" }),
+        fetchAuditLogs({ limit: 5 }),
+      ])
+      setAgents(ags.filter((a) => a.status !== "deleted"))
+      setConnectors(cons)
+      setPendingApprovals(approvals)
+      setRecentLogs(logs.items)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const activeAgents = agents.filter((a) => a.status === "active").length
+  const totalSpend = recentLogs
+    .filter((l) => l.outcome === "ALLOW" && l.amount)
+    .reduce((sum, l) => sum + Number(l.amount), 0)
+
   const statCards = [
-    { label: "Total Spend (30d)", value: "$48,320", delta: "+12% vs last month", icon: DollarSign },
-    { label: "Transaction Count", value: "1,204", delta: "+8% vs last month", icon: Activity },
-    { label: "Pending Approvals", value: "3", delta: "Needs attention", icon: Clock },
-    { label: "Active Agents", value: "2", delta: "of 3 total", icon: Bot },
+    { label: "Total Spend (recent)", value: `$${totalSpend.toLocaleString()}`, delta: "From last 5 transactions", icon: DollarSign },
+    { label: "Transaction Count", value: String(recentLogs.length), delta: "Recent activity", icon: Activity },
+    { label: "Pending Approvals", value: String(pendingApprovals.length), delta: "Needs attention", icon: Clock },
+    { label: "Active Agents", value: String(activeAgents), delta: `of ${agents.length} total`, icon: Bot },
   ]
 
   return (
@@ -36,8 +74,10 @@ function OverviewPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Overview</h1>
-        <span className="text-xs text-muted-foreground">Last 30 days</span>
+        <span className="text-xs text-muted-foreground">Real-time</span>
       </div>
+
+      {error && <p className="text-[10px] text-destructive">{error}</p>}
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => (
@@ -69,20 +109,30 @@ function OverviewPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {recentTransactions.map((tx) => (
-                <TableRow key={tx.id}>
-                  <TableCell className="py-1.5 text-xs font-medium">{tx.agent}</TableCell>
-                  <TableCell className="py-1.5">
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">{tx.rail}</Badge>
-                  </TableCell>
-                  <TableCell className="py-1.5 text-xs">{tx.action}</TableCell>
-                  <TableCell className="py-1.5 text-xs">${tx.amount.toLocaleString()}</TableCell>
-                  <TableCell className="py-1.5">
-                    <StatusBadge status={tx.status} />
-                  </TableCell>
-                  <TableCell className="py-1.5 text-xs text-muted-foreground">{tx.ts}</TableCell>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-xs text-muted-foreground py-3">Loading...</TableCell>
                 </TableRow>
-              ))}
+              ) : recentLogs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-xs text-muted-foreground py-3">No recent transactions</TableCell>
+                </TableRow>
+              ) : (
+                recentLogs.map((tx) => (
+                  <TableRow key={tx.id}>
+                    <TableCell className="py-1.5 text-xs font-medium">{tx.agentId.slice(0, 8)}...</TableCell>
+                    <TableCell className="py-1.5">
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{tx.rail}</Badge>
+                    </TableCell>
+                    <TableCell className="py-1.5 text-xs">{tx.action}</TableCell>
+                    <TableCell className="py-1.5 text-xs">{tx.amount ? `$${Number(tx.amount).toLocaleString()}` : "—"}</TableCell>
+                    <TableCell className="py-1.5">
+                      <StatusBadge status={tx.outcome} />
+                    </TableCell>
+                    <TableCell className="py-1.5 text-xs text-muted-foreground">{new Date(tx.createdAt).toLocaleString()}</TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </Card>
@@ -96,22 +146,27 @@ function OverviewPage() {
           </Link>
         </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-          {pendingApprovals.slice(0, 3).map((item) => (
-            <Card key={item.id} className="border-l-4 border-l-yellow-400">
-              <CardContent className="flex flex-col gap-2 pt-3 px-3 pb-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">{item.agent}</span>
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{item.rail}</Badge>
-                </div>
-                <div className="text-xl font-bold">${item.amount.toLocaleString()}</div>
-                <p className="text-[10px] text-muted-foreground">Waiting {item.waitingMin} min</p>
-                <div className="flex gap-1.5">
-                  <Button size="sm" className="flex-1 h-6 text-xs">Approve</Button>
-                  <Button size="sm" variant="outline" className="flex-1 h-6 text-xs">Reject</Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {loading ? (
+            <div className="text-xs text-muted-foreground py-4">Loading...</div>
+          ) : pendingApprovals.length === 0 ? (
+            <div className="text-xs text-muted-foreground py-4">No pending approvals</div>
+          ) : (
+            pendingApprovals.slice(0, 3).map((item) => (
+              <Card key={item.id} className="border-l-4 border-l-yellow-400">
+                <CardContent className="flex flex-col gap-2 pt-3 px-3 pb-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium">{item.agentId.slice(0, 8)}...</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">{item.currency || "USD"}</Badge>
+                  </div>
+                  <div className="text-xl font-bold">${item.amount ? Number(item.amount).toLocaleString() : "—"}</div>
+                  <p className="text-[10px] text-muted-foreground">Waiting for approval</p>
+                  <div className="flex gap-1.5">
+                    <Button size="sm" className="flex-1 h-6 text-xs" onClick={() => window.location.href = "/approvals"}>Review</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -119,10 +174,10 @@ function OverviewPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  if (status === "ALLOWED") {
+  if (status === "ALLOW") {
     return <Badge className="bg-primary text-primary-foreground text-[10px] px-1.5 py-0">ALLOWED</Badge>
   }
-  if (status === "HELD") {
+  if (status === "HOLD") {
     return <Badge className="bg-yellow-500/20 text-yellow-400 text-[10px] px-1.5 py-0">HELD</Badge>
   }
   return <Badge className="bg-destructive/20 text-destructive text-[10px] px-1.5 py-0">DENIED</Badge>

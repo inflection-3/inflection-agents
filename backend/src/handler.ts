@@ -9,6 +9,7 @@ import type { EvaluateContext, AgentPolicyRules, ConnectorPolicyRules, Rail } fr
 import { ConnectorExecutor } from "./connectors/executor";
 import { writeAuditLog, sanitizeArgs } from "./audit-log";
 import { newId } from "./lib/auth";
+import { dispatchHoldNotification } from "./notifications";
 
 const redis = Bun.redis;
 const IDEM_TTL_SECS = 86400; // 24 h
@@ -59,7 +60,7 @@ async function loadConnectorPolicy(
 // ─── Request body ─────────────────────────────────────────────────────────────
 
 interface ExecuteBody {
-  connectorId: string;
+  rail: string;
   action: string;
   args: Record<string, unknown>;
   amount?: string;
@@ -78,13 +79,15 @@ export async function handleExecute(c: Context): Promise<Response> {
   const body = await c.req.json<ExecuteBody>();
 
   const {
-    connectorId, action, args = {}, amount, currency,
+    rail, action, args = {}, amount, currency,
     recipientId, recipientCountry, recipientEntity, recipientDomain,
     idempotencyKey,
   } = body;
 
-  if (!connectorId || !action || !idempotencyKey) {
-    throw new HTTPException(400, { message: "connectorId, action, and idempotencyKey are required" });
+  console.log(`[execute] agent=${agentId} rail=${rail} action=${action} amount=${amount ?? "-"} currency=${currency ?? "-"}`);
+
+  if (!rail || !action || !idempotencyKey) {
+    throw new HTTPException(400, { message: "rail, action, and idempotencyKey are required" });
   }
 
   const startMs = Date.now();
@@ -94,24 +97,24 @@ export async function handleExecute(c: Context): Promise<Response> {
   const prior = await redis.get(idemKey) as string | null;
   if (prior) return c.json(JSON.parse(prior));
 
-  // Resolve connector → rail + userId
+  // Resolve active connector for this agent + rail
   const [connRow] = await db
-    .select({ rail: connectors.rail, userId: connectors.userId })
+    .select({ id: connectors.id, userId: connectors.userId })
     .from(connectors)
     .where(
       and(
-        eq(connectors.id, connectorId),
         eq(connectors.agentId, agentId),
+        eq(connectors.rail, rail as Rail),
         eq(connectors.status, "active")
       )
     )
     .limit(1);
 
   if (!connRow) {
-    throw new HTTPException(404, { message: "Connector not found or inactive" });
+    throw new HTTPException(404, { message: `No active ${rail} connector found for this agent` });
   }
 
-  const { rail, userId } = connRow;
+  const { id: connectorId, userId } = connRow;
 
   // Load policies (parallel)
   const [agentPolicyRow, connectorPolicyRow] = await Promise.all([
@@ -139,6 +142,7 @@ export async function handleExecute(c: Context): Promise<Response> {
   };
 
   const decision = await evaluate(ctx);
+  console.log(`[execute] decision=${decision.decision}${decision.decision !== "ALLOW" ? ` rule=${decision.ruleId}` : ""}`);
 
   const argsHash = createHash("sha256")
     .update(JSON.stringify(sanitizeArgs(args)), "utf8")
@@ -149,9 +153,12 @@ export async function handleExecute(c: Context): Promise<Response> {
   if (decision.decision === "ALLOW") {
     let providerTxId: string | undefined;
     try {
+      console.log(`[execute] calling connector=${connectorId} action=${action} args=${JSON.stringify(args)}`);
       const result = await ConnectorExecutor.execute(connectorId, { action, args, idempotencyKey });
       providerTxId = result.providerTxId;
+      console.log(`[execute] connector ok providerTxId=${providerTxId}`);
     } catch (err) {
+      console.error(`[execute] connector error: ${(err as Error).message}`);
       const durationMs = Date.now() - startMs;
       await writeAuditLog({
         id: newId(), agentId, userId, connectorId, rail, action,
@@ -201,6 +208,15 @@ export async function handleExecute(c: Context): Promise<Response> {
       policyId: agentPolicyRow?.id, connectorPolicyId: connectorPolicyRow?.id,
       argsHash, approvalId, durationMs,
     });
+
+    dispatchHoldNotification({
+      approvalId,
+      agentId,
+      action,
+      amount,
+      currency,
+      reason: decision.reason,
+    }).catch((err) => console.error("[handler] notification error:", (err as Error).message));
 
     return c.json({ outcome: "HOLD", approvalId, reason: decision.reason }, 202);
   }

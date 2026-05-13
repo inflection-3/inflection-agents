@@ -1,11 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
-import { useState } from "react"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Link, createFileRoute } from "@tanstack/react-router"
+import { useEffect, useState } from "react"
+import { AlertTriangle, Plus } from "lucide-react"
+import type {Agent, Connector} from "@/lib/api";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -35,8 +37,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { connectedAccounts, agents } from "@/lib/data"
-import { Plus, AlertTriangle } from "lucide-react"
+import {   createConnector, fetchAgents, fetchConnectors, revokeConnector } from "@/lib/api"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 
 export const Route = createFileRoute("/connectors")({ component: ConnectorsPage })
@@ -45,59 +46,85 @@ const railColors: Record<string, string> = {
   stripe: "border-l-[#635BFF]",
   circle: "border-l-[#0066FF]",
   x402: "border-l-primary",
+  square: "border-l-orange-400",
+  braintree: "border-l-cyan-400",
+  razorpay: "border-l-blue-400",
 }
 
 const railLabels: Record<string, string> = {
   stripe: "Stripe",
   circle: "Circle",
   x402: "x402",
+  square: "Square",
+  braintree: "Braintree",
+  razorpay: "Razorpay",
 }
 
 function ConnectorsPage() {
-  const [accounts, setAccounts] = useState<any[]>(connectedAccounts)
+  const [accounts, setAccounts] = useState<Array<Connector>>([])
+  const [agents, setAgents] = useState<Array<Agent>>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [connectOpen, setConnectOpen] = useState(false)
-  const [connectStep, setConnectStep] = useState<"rail" | "auth" | "success">("rail")
+  const [connectStep, setConnectStep] = useState<"rail" | "form" | "success">("rail")
   const [selectedRail, setSelectedRail] = useState<string | null>(null)
-  const [assignOpen, setAssignOpen] = useState<string | null>(null)
+  const [selectedAgent, setSelectedAgent] = useState("")
+  const [credentialInput, setCredentialInput] = useState("")
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    try {
+      setLoading(true)
+      const [conns, ags] = await Promise.all([fetchConnectors(), fetchAgents()])
+      setAccounts(conns)
+      setAgents(ags)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const startConnect = (rail: string) => {
     setSelectedRail(rail)
-    setConnectStep("auth")
+    setConnectStep("form")
   }
 
-  const finishConnect = () => {
-    if (!selectedRail) return
-    const id = "con_" + selectedRail + "_" + Math.random().toString(36).slice(2, 6)
-    setAccounts((prev) => [
-      ...prev,
-      {
-        id,
-        rail: selectedRail as "stripe" | "circle" | "x402",
-        accountId: selectedRail === "x402" ? "0x" + Math.random().toString(16).slice(2, 10) : "acct_" + Math.random().toString(36).slice(2, 8),
-        accountLabel: selectedRail === "x402" ? "Agent Wallet" : "New Account",
-        status: "active" as const,
-        connectedAt: new Date().toISOString().slice(0, 10),
-        assignedAgents: [],
-      },
-    ])
-    setConnectStep("success")
+  const finishConnect = async () => {
+    if (!selectedRail || !selectedAgent || !credentialInput) return
+    const isWallet = selectedRail === "x402"
+    try {
+      const conn = await createConnector({
+        agentId: selectedAgent,
+        rail: selectedRail,
+        authType: isWallet ? "wallet" : "api_key",
+        credentials: isWallet ? { privateKey: credentialInput } : { apiKey: credentialInput },
+      })
+      setAccounts((prev) => [...prev, conn])
+      setConnectStep("success")
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
-  const revokeAccount = (id: string) => {
-    setAccounts((prev) => prev.filter((a) => a.id !== id))
-  }
-
-  const assignAgents = (accountId: string, agentIds: string[]) => {
-    setAccounts((prev) =>
-      prev.map((a) =>
-        a.id === accountId ? { ...a, assignedAgents: agentIds } : a
-      )
-    )
-    setAssignOpen(null)
+  const revokeAccount = async (id: string) => {
+    try {
+      await revokeConnector(id)
+      setAccounts((prev) => prev.filter((a) => a.id !== id))
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
   const rails = ["stripe", "circle", "x402", "square", "braintree", "razorpay"]
   const lockedRails = ["square", "braintree", "razorpay"]
+
+  const agentHasConnector = (agentId: string, rail: string) => {
+    return accounts.some((c) => c.agentId === agentId && c.rail === rail && c.status === "active")
+  }
 
   return (
     <div className="flex min-h-svh flex-col gap-3 p-3">
@@ -115,7 +142,7 @@ function ConnectorsPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Connectors</h1>
-        <Dialog open={connectOpen} onOpenChange={(o) => { setConnectOpen(o); if (!o) { setConnectStep("rail"); setSelectedRail(null) } }}>
+        <Dialog open={connectOpen} onOpenChange={(o) => { setConnectOpen(o); if (!o) { setConnectStep("rail"); setSelectedRail(null); setSelectedAgent(""); setCredentialInput("") } }}>
           <DialogTrigger asChild>
             <Button size="sm">
               <Plus className="size-3.5 mr-1" />
@@ -125,7 +152,7 @@ function ConnectorsPage() {
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle className="text-sm">Connect Account</DialogTitle>
-              <DialogDescription className="text-xs">Link a payment provider to Inflection.</DialogDescription>
+              <DialogDescription className="text-xs">Link a payment provider to an agent.</DialogDescription>
             </DialogHeader>
             {connectStep === "rail" && (
               <div className="grid grid-cols-3 gap-2">
@@ -136,9 +163,7 @@ function ConnectorsPage() {
                       key={rail}
                       disabled={locked}
                       onClick={() => !locked && startConnect(rail)}
-                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3 transition-colors ${
-                        locked ? "opacity-50 cursor-not-allowed" : "hover:border-primary/50 hover:bg-accent"
-                      }`}
+                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3 transition-colors ${locked ? "opacity-50 cursor-not-allowed" : "hover:border-primary/50 hover:bg-accent"}`}
                     >
                       <span className="text-sm font-semibold capitalize">{rail}</span>
                       {locked && <Badge variant="secondary" className="text-[10px]">Coming soon</Badge>}
@@ -147,26 +172,34 @@ function ConnectorsPage() {
                 })}
               </div>
             )}
-            {connectStep === "auth" && selectedRail && (
+            {connectStep === "form" && selectedRail && (
               <div className="flex flex-col gap-3">
                 <p className="text-xs text-muted-foreground">
                   Authenticate your {railLabels[selectedRail] || selectedRail} account.
                 </p>
-                {selectedRail === "stripe" ? (
-                  <Button size="sm" onClick={finishConnect}>Connect with Stripe</Button>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex flex-col gap-1">
-                      <Label className="text-xs">{selectedRail === "x402" ? "Wallet Address" : "API Key"}</Label>
-                      <Input placeholder={selectedRail === "x402" ? "0x..." : "sk_..."} className="h-7 text-xs" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <Label className="text-xs">Label (optional)</Label>
-                      <Input placeholder="e.g. Production" className="h-7 text-xs" />
-                    </div>
-                    <Button size="sm" onClick={finishConnect}>Connect</Button>
-                  </div>
-                )}
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">Agent</Label>
+                  <select
+                    className="h-8 text-xs rounded-md border px-2"
+                    value={selectedAgent}
+                    onChange={(e) => setSelectedAgent(e.target.value)}
+                  >
+                    <option value="">Select an agent...</option>
+                    {agents.filter((a) => a.status === "active" && !agentHasConnector(a.id, selectedRail)).map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">{selectedRail === "x402" ? "Private Key" : "API Key"}</Label>
+                  <Input
+                    placeholder={selectedRail === "x402" ? "0x..." : "sk_..."}
+                    className="h-7 text-xs"
+                    value={credentialInput}
+                    onChange={(e) => setCredentialInput(e.target.value)}
+                  />
+                </div>
+                <Button size="sm" disabled={!selectedAgent || !credentialInput} onClick={finishConnect}>Connect</Button>
               </div>
             )}
             {connectStep === "success" && (
@@ -174,7 +207,7 @@ function ConnectorsPage() {
                 <div className="text-xl">✓</div>
                 <p className="text-sm font-medium">Account connected successfully!</p>
                 <DialogFooter className="w-full">
-                  <Button size="sm" onClick={() => { setConnectOpen(false); setConnectStep("rail"); setSelectedRail(null) }}>Done</Button>
+                  <Button size="sm" onClick={() => { setConnectOpen(false); setConnectStep("rail"); setSelectedRail(null); setSelectedAgent(""); setCredentialInput(""); }}>Done</Button>
                 </DialogFooter>
               </div>
             )}
@@ -182,7 +215,23 @@ function ConnectorsPage() {
         </Dialog>
       </div>
 
-      {accounts.length === 0 ? (
+      {error && <p className="text-[10px] text-destructive">{error}</p>}
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardHeader className="pb-1 pt-2 px-3">
+                <Skeleton className="h-4 w-20" />
+              </CardHeader>
+              <CardContent className="px-3 pb-2">
+                <Skeleton className="h-3 w-32 mb-1" />
+                <Skeleton className="h-3 w-24" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : accounts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-8 gap-2">
           <p className="text-xs text-muted-foreground">No payment accounts connected yet.</p>
           <Button size="sm" onClick={() => setConnectOpen(true)}>Connect Account</Button>
@@ -197,32 +246,18 @@ function ConnectorsPage() {
                   <CardHeader className="pb-1 pt-2 px-3">
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-xs font-semibold capitalize">{railLabels[account.rail] || account.rail}</CardTitle>
-                      <Badge className="bg-primary/20 text-primary text-[10px] px-1.5 py-0">{account.status.toUpperCase()}</Badge>
+                      <Badge className={`text-[10px] px-1.5 py-0 ${account.status === "active" ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"}`}>
+                        {account.status.toUpperCase()}
+                      </Badge>
                     </div>
                     <CardDescription className="text-[10px]">
-                      {account.accountLabel ? `${account.accountLabel} (${account.accountId})` : account.accountId}
+                      {account.maskedCredential}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-2 text-xs px-3 pb-2">
-                    <div className="text-muted-foreground text-[10px]">Connected {account.connectedAt}</div>
-                    <div className="text-muted-foreground text-[10px]">Used by {account.assignedAgents.length} agent{account.assignedAgents.length !== 1 ? "s" : ""}</div>
+                    <div className="text-muted-foreground text-[10px]">Connected {new Date(account.createdAt).toLocaleDateString()}</div>
+                    <div className="text-muted-foreground text-[10px]">Agent: {agents.find((a) => a.id === account.agentId)?.name || account.agentId}</div>
                     <div className="flex gap-1.5 pt-0.5">
-                      <Dialog open={assignOpen === account.id} onOpenChange={(o) => setAssignOpen(o ? account.id : null)}>
-                        <DialogTrigger asChild>
-                          <Button size="sm" variant="outline" className="h-6 text-[10px]">Assign to Agent</Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle className="text-sm">Assign to Agent</DialogTitle>
-                            <DialogDescription className="text-xs">Choose agents that can use this connector.</DialogDescription>
-                          </DialogHeader>
-                          <AssignForm
-                            account={account}
-                            agents={agents}
-                            onSave={(ids) => assignAgents(account.id, ids)}
-                          />
-                        </DialogContent>
-                      </Dialog>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button size="sm" variant="ghost" className="h-6 text-[10px] text-destructive">Revoke</Button>
@@ -231,7 +266,7 @@ function ConnectorsPage() {
                           <AlertDialogHeader>
                             <AlertDialogTitle className="text-sm">Revoke {railLabels[account.rail]} connection?</AlertDialogTitle>
                             <AlertDialogDescription className="text-xs">
-                              This will immediately block assigned agents from making {account.rail} calls. This cannot be undone.
+                              This will immediately block this agent from making {account.rail} calls. This cannot be undone.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
                           <AlertDialogFooter>
@@ -262,8 +297,8 @@ function ConnectorsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {agents.map((agent) => {
-                    const agentAccounts = accounts.filter((a) => a.assignedAgents.includes(agent.id))
+                  {agents.filter((a) => a.status !== "deleted").map((agent) => {
+                    const agentAccounts = accounts.filter((a) => a.agentId === agent.id && a.status === "active")
                     return (
                       <TableRow key={agent.id}>
                         <TableCell className="py-1.5 text-xs font-medium">{agent.name}</TableCell>
@@ -292,46 +327,6 @@ function ConnectorsPage() {
           </div>
         </>
       )}
-    </div>
-  )
-}
-
-function AssignForm({
-  account,
-  agents,
-  onSave,
-}: {
-  account: (typeof connectedAccounts)[0]
-  agents: typeof import("@/lib/data").agents
-  onSave: (ids: string[]) => void
-}) {
-  const [selected, setSelected] = useState<string[]>(account.assignedAgents)
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1.5">
-        {agents.map((agent) => {
-          const alreadyAssigned = account.assignedAgents.includes(agent.id)
-          return (
-            <label key={agent.id} className={`flex items-center gap-2 rounded-md border p-2 ${alreadyAssigned ? "opacity-60" : ""}`}>
-              <Checkbox
-                checked={selected.includes(agent.id)}
-                disabled={alreadyAssigned}
-                onCheckedChange={(checked) => {
-                  setSelected((prev) =>
-                    checked ? [...prev, agent.id] : prev.filter((id) => id !== agent.id)
-                  )
-                }}
-              />
-              <span className="text-xs font-medium">{agent.name}</span>
-              {alreadyAssigned && <Badge variant="secondary" className="ml-auto text-[10px]">Already assigned</Badge>}
-            </label>
-          )
-        })}
-      </div>
-      <DialogFooter>
-        <Button size="sm" onClick={() => onSave(selected)}>Save Assignments</Button>
-      </DialogFooter>
     </div>
   )
 }

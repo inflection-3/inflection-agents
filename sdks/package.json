@@ -1,7 +1,7 @@
 {
-	"name": "sdks",
-	"version": "0.1.0",
-	"description": "a payments sdk for ai agents",
+	"name": "@inflection/sdk",
+	"version": "1.0.0",
+	"description": "payments SDK for AI agents — policy-enforced payment execution",
 	"homepage": "https://github.com/inflection-3/inflection-agents#readme",
 	"bugs": {
 		"url": "https://github.com/inflection-3/inflection-agents/issues"
@@ -22,6 +22,12 @@
 			"import": {
 				"types": "./dist/index.d.ts",
 				"default": "./dist/index.js"
+			}
+		},
+		"./testing": {
+			"import": {
+				"types": "./dist/testing.d.ts",
+				"default": "./dist/testing.js"
 			}
 		},
 		"./package.json": "./package.json"
@@ -57,5 +63,8 @@
 	},
 	"simple-git-hooks": {
 		"pre-commit": "bun run lint && bun run type-check"
+	},
+	"dependencies": {
+		"vitest": "^4.1.6"
 	}
 }

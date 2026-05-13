@@ -2,673 +2,492 @@
 
 **Package:** `@inflection/sdk`  
 **Version:** 1.x  
-**Language:** TypeScript (Node.js ≥ 18)
+**Language:** TypeScript (Bun / Node.js ≥ 18)
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Installation](#2-installation)
-3. [Initialization](#3-initialization)
-4. [Rail Clients](#4-rail-clients)
-   - [Stripe](#41-stripe)
-   - [Circle](#42-circle)
-   - [x402](#43-x402)
-   - [Square](#44-square)
-   - [Braintree](#45-braintree)
-   - [Razorpay](#46-razorpay)
-5. [Execution Flow](#5-execution-flow)
+2. [Architecture](#2-architecture)
+3. [Installation](#3-installation)
+4. [Initialization](#4-initialization)
+5. [Executing Payments](#5-executing-payments)
 6. [Handling Decisions](#6-handling-decisions)
-7. [Error Types](#7-error-types)
+7. [Per-Rail Action Reference](#7-per-rail-action-reference)
 8. [TypeScript Types](#8-typescript-types)
-9. [Configuration Reference](#9-configuration-reference)
-10. [Testing and Sandbox Mode](#10-testing-and-sandbox-mode)
-11. [Security Considerations](#11-security-considerations)
+9. [Per-Rail Helpers (Optional)](#9-per-rail-helpers-optional)
+10. [Exported Constants](#10-exported-constants)
+11. [Error Types](#11-error-types)
+12. [Testing](#12-testing)
 
 ---
 
 ## 1. Overview
 
-Inflection is a **financial policy enforcement and compliance layer for AI agents**. The SDK sits between your agent's code and the underlying payment provider SDKs. Every financial operation your agent initiates is intercepted, forwarded to the Inflection gateway for a policy decision, and either allowed, denied, or held for human approval — before the actual API call reaches the payment provider.
+Inflection is a **financial policy enforcement layer for AI agents**. It sits between your agent code and the payment providers (Stripe, Circle, x402, Square, Braintree, Razorpay). Every payment action your agent attempts is evaluated against a developer-configured policy before the provider is called — and every decision is written to a tamper-evident audit log.
 
-### What the SDK does
+**What the SDK does:**
 
-- Provides **pre-authorized, policy-aware clients** for all major payment rails (Stripe, Circle, x402, Square, Braintree, Razorpay)
-- **Intercepts every outbound financial call** and sends metadata to the Inflection gateway for policy evaluation
-- Surfaces **ALLOW / DENY / HOLD** decisions to your agent code with structured error types and approval objects
-- Maintains a **tamper-evident audit log** of every financial action attempted by your agent
-- Handles **approval polling and webhook callbacks** for HOLD decisions without requiring you to build that infrastructure
+- Wraps `POST /v1/execute` — the single gateway endpoint that enforces policy and runs the connector
+- Returns typed `ALLOW`, `DENY`, or `HOLD` responses
+- Provides per-rail TypeScript helpers so you write `inflection.stripe.charges.create(...)` instead of constructing raw JSON
+- Exports `ACTIONS_BY_RAIL` and `CURRENCIES_BY_RAIL` constants so agents can reason about what's permitted at build time
 
-### What the SDK does NOT do
+**What the SDK does NOT do:**
 
-- **Does not store or proxy payment credentials.** Users connect their own Stripe, Circle, Square, etc. accounts in the Inflection dashboard. The SDK never sees raw API keys for payment providers.
-- **Does not host or run agents.** Inflection has no awareness of your agent's runtime, orchestration, or LLM calls.
-- **Does not modify provider responses.** When a call is allowed, the response you get back is exactly the native provider response — same shape, same types.
-- **Does not replace the underlying SDKs' full feature set.** The rail clients expose the intercepted subset of methods relevant to financial operations. For non-financial operations, use the provider SDK directly.
-
-### Architecture at a glance
-
-```
-Your agent code
-     │
-     ▼
-inflection.rails.stripe.charges.create(...)
-     │
-     ▼
-Inflection SDK (intercepts call, extracts metadata)
-     │
-     ▼  [HTTPS]
-Inflection Gateway  ──► Policy engine (user's rules)
-     │                        │
-     │         ┌──────────────┼──────────────┐
-     │       ALLOW           DENY           HOLD
-     │         │               │               │
-     ▼         ▼               ▼               ▼
-Stripe API  Returns        Throws         Returns
- (real call) result    InflectionDenyError  PendingApproval
-```
+- Does not bundle or proxy native payment provider SDKs (Stripe, Circle, etc.)
+- Does not store or transmit payment credentials — those are held encrypted on the backend
+- Does not have any concept of policies — policies are configured in the Inflection dashboard by the developer and evaluated server-side
 
 ---
 
-## 2. Installation
+## 2. Architecture
+
+```
+Agent code
+    │
+    │  inflection.stripe.charges.create({ amount: 5000, currency: "usd", ... })
+    │  (or inflection.execute({ connectorId, action: "charges.create", args, ... }))
+    │
+    ▼
+InflectionClient  ─── POST /v1/execute ──────────────────────────────────►  Inflection Backend
+Authorization: Bearer infl_live_...                                              │
+Body: { connectorId, action, args, amount, currency, idempotencyKey }            │
+                                                                            Policy Engine
+                                                                                 │
+                                                                   ┌─────────────┼─────────────┐
+                                                                 ALLOW          DENY          HOLD
+                                                                   │              │              │
+                                                             Connector        Returns        Creates
+                                                             executes        403 DENY        approval
+                                                           (Stripe API,      response       record,
+                                                            Circle, etc)                   returns 202
+                                                                   │
+                                                             Returns 200
+                                                             { outcome: "ALLOW", providerTxId }
+```
+
+### Key concepts
+
+**Agent API key** — issued per agent on the Inflection dashboard. Format: `infl_live_<random>` (production) or `infl_test_<random>` (test mode). This is the only credential the SDK holds. It identifies which agent is making the call and resolves to that agent's policy configuration and connectors.
+
+**Connector** — a payment provider account (e.g., a specific Stripe account) linked to an agent in the dashboard. Connectors have a unique `connectorId`. Credentials are stored AES-256-GCM encrypted on the backend — the agent never sees them. The backend decrypts them at execution time to make the actual provider API call.
+
+**Policy** — a versioned ruleset attached to an agent or to a specific connector. Policies are configured in the dashboard, not in the SDK. Every call to `/v1/execute` is evaluated against the latest policy version.
+
+**Decision** — the policy engine returns one of three outcomes:
+- `ALLOW` — policy passed, provider call was made, `providerTxId` is returned
+- `DENY` — a policy rule blocked the call, provider was not called
+- `HOLD` — a rule requires human approval, provider not called yet, `approvalId` is returned
+
+---
+
+## 3. Installation
 
 ```bash
-# npm
-npm install @inflection/sdk
-
-# yarn
-yarn add @inflection/sdk
-
-# bun
 bun add @inflection/sdk
+# or
+npm install @inflection/sdk
 ```
 
-The SDK ships with TypeScript declarations. No `@types/` package needed.
-
-**Peer dependencies** are the native provider SDKs, installed only for the rails you use:
-
-```bash
-# Install only what you need
-npm install stripe                    # for inflection.rails.stripe
-npm install @circle-fin/circle-sdk   # for inflection.rails.circle
-npm install square                    # for inflection.rails.square
-npm install braintree                 # for inflection.rails.braintree
-npm install razorpay                  # for inflection.rails.razorpay
-# x402 has no additional peer dependency
-```
+No peer dependencies. The SDK is a pure HTTP client — it does not import Stripe, Circle, or any provider SDK.
 
 ---
 
-## 3. Initialization
+## 4. Initialization
 
 ```typescript
-import { Inflection } from "@inflection/sdk"
+import { InflectionClient } from "@inflection/sdk"
 
-const inflection = new Inflection({
-  agentKey: "ak_live_51abc...",
+const inflection = new InflectionClient({
+  apiKey: process.env.INFLECTION_API_KEY!,
+  // baseUrl defaults to "http://localhost:3001" for local dev
+  // set to your deployed backend URL in production
+  baseUrl: process.env.INFLECTION_BASE_URL ?? "http://localhost:3001",
 })
 ```
 
-The `agentKey` is issued when you register an agent on the Inflection dashboard. Users who deploy your agent connect their own payment provider accounts and configure policies against that `agentKey`. The key identifies which agent is making calls and resolves to the deploying user's policy config at the gateway.
+### Constructor options
 
-### Full initialization with options
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `apiKey` | `string` | Yes | — | Agent API key from the dashboard. `infl_live_` or `infl_test_` prefix. |
+| `baseUrl` | `string` | No | `"http://localhost:3001"` | Inflection backend base URL. |
+| `timeout` | `number` | No | `10000` | Request timeout in milliseconds. |
+
+---
+
+## 5. Executing Payments
+
+All payment execution goes through one method: `inflection.execute()`.
 
 ```typescript
-import { Inflection } from "@inflection/sdk"
-
-const inflection = new Inflection({
-  agentKey: process.env.INFLECTION_AGENT_KEY!,
-  options: {
-    timeout: 8000,                   // ms, default: 10000
-    retryConfig: {
-      maxRetries: 3,                 // default: 2
-      initialDelayMs: 200,           // default: 100
-      backoffMultiplier: 2,          // default: 2
-      retryableStatuses: [429, 502, 503, 504],
-    },
-    baseUrl: "https://gateway.inflection.dev", // default; override for self-hosted
-    logLevel: "warn",                // "debug" | "info" | "warn" | "error" | "silent"
+const result = await inflection.execute({
+  rail: "stripe",                    // which payment rail to use
+  action: "charges.create",          // action name (must be in the connector's allowedActions policy)
+  args: {                            // action arguments — passed to the provider
+    amount: 5000,
+    currency: "usd",
+    source: "tok_visa",
+    description: "Invoice #1042",
   },
+  amount: "50.00",                   // normalized amount string (for policy evaluation)
+  currency: "usd",                   // ISO 4217 currency code (for policy evaluation)
+  idempotencyKey: crypto.randomUUID(), // caller-supplied idempotency key
+  // optional metadata for policy evaluation
+  recipientId: "cus_xyz",            // hashed recipient identifier
+  recipientCountry: "US",            // ISO 3166-1 alpha-2
 })
 ```
 
-### Destructuring rail clients
+### Execute request
 
 ```typescript
-const { stripe, circle, x402, square, braintree, razorpay } = inflection.rails
-```
-
-Rail clients are lazily instantiated — no network call is made until you use a client. If the corresponding peer dependency is not installed, accessing that rail throws an `InflectionConfigError` at runtime.
-
----
-
-## 4. Rail Clients
-
-Each rail client is a **proxy wrapper** around the native provider SDK client. The wrapper:
-
-1. Intercepts the call before it reaches the provider
-2. Serializes call metadata (method, amount, currency, recipient, etc.) and sends it to the Inflection gateway
-3. Waits for a policy decision
-4. If ALLOW: forwards the original call to the provider and returns the response
-5. If DENY: throws `InflectionDenyError` — the provider is never called
-6. If HOLD: returns a `PendingApproval` object — the provider is never called until the user approves
-
-### 4.1 Stripe
-
-The Stripe rail wraps `stripe` (npm: `stripe`). It intercepts all methods that move money or create financial obligations.
-
-**Intercepted namespaces and methods:**
-
-| Namespace | Intercepted Methods |
-|---|---|
-| `charges` | `create` |
-| `paymentIntents` | `create`, `confirm`, `capture` |
-| `refunds` | `create` |
-| `transfers` | `create` |
-| `payouts` | `create` |
-| `subscriptions` | `create`, `update` |
-| `invoices` | `pay`, `sendInvoice` |
-
-Non-intercepted methods (e.g., `customers.retrieve`, `paymentMethods.list`) pass through directly to Stripe without going through the gateway.
-
-**Usage:**
-
-```typescript
-import { Inflection, InflectionDenyError, PendingApproval } from "@inflection/sdk"
-
-const inflection = new Inflection({ agentKey: process.env.INFLECTION_AGENT_KEY! })
-const { stripe } = inflection.rails
-
-// Create a charge — intercepted
-const charge = await stripe.charges.create({
-  amount: 5000,           // cents
-  currency: "usd",
-  source: "tok_visa",
-  description: "Invoice #1042",
-})
-// charge is a native Stripe.Charge object
-
-// Create a payout — intercepted
-const payout = await stripe.payouts.create({
-  amount: 100000,
-  currency: "usd",
-})
-
-// List customers — NOT intercepted, passes through
-const customers = await stripe.customers.list({ limit: 10 })
-```
-
-**Type signature for intercepted calls:**
-
-```typescript
-// The rail client's intercepted methods return:
-// - The native provider type on ALLOW
-// - Never (throws) on DENY
-// - PendingApproval<T> on HOLD (where T is the native return type)
-//
-// Because HOLD is possible, the return type is:
-type InterceptedResult<T> = T | PendingApproval<T>
-```
-
-In practice, if you want to handle HOLD explicitly:
-
-```typescript
-import { isPendingApproval } from "@inflection/sdk"
-
-const result = await stripe.paymentIntents.create({
-  amount: 250000,
-  currency: "usd",
-  payment_method: "pm_card_visa",
-  confirm: true,
-})
-
-if (isPendingApproval(result)) {
-  // Policy put this on hold — handle approval flow
-  const approved = await result.wait()
-  // approved is the native Stripe.PaymentIntent
-} else {
-  // Was allowed immediately — result is Stripe.PaymentIntent
-  console.log("Payment intent:", result.id)
+interface ExecuteRequest {
+  rail: Rail
+  action: string
+  args: Record<string, unknown>
+  amount?: string               // required for monetary actions
+  currency?: string             // required for monetary actions
+  idempotencyKey: string
+  recipientId?: string
+  recipientCountry?: string
+  recipientEntity?: string
+  recipientDomain?: string
 }
 ```
 
-### 4.2 Circle
+### Execute response
 
-The Circle rail wraps `@circle-fin/circle-sdk`. It intercepts USDC and cross-chain transfer operations.
-
-**Intercepted methods:**
-
-| Namespace | Intercepted Methods |
-|---|---|
-| `transfers` | `createTransfer` |
-| `payouts` | `createPayout` |
-| `payments` | `createPayment` |
-| `businessAccount.transfers` | `createBusinessTransfer` |
-
-**Usage:**
+The response is a discriminated union on `outcome`:
 
 ```typescript
-const { circle } = inflection.rails
+type ExecuteResponse =
+  | AllowResponse
+  | DenyResponse
+  | HoldResponse
 
-const transfer = await circle.transfers.createTransfer({
+interface AllowResponse {
+  outcome: "ALLOW"
+  providerTxId?: string   // provider's transaction/object ID
+  durationMs: number
+}
+
+interface DenyResponse {
+  outcome: "DENY"
+  reason: string          // human-readable deny message
+  ruleId: string          // which policy rule triggered the deny
+  durationMs: number
+}
+
+interface HoldResponse {
+  outcome: "HOLD"
+  approvalId: string      // use this to poll the approval status
+  reason: string          // which policy rule triggered the hold
+  durationMs: number
+}
+```
+
+### Full example with decision handling
+
+```typescript
+import { InflectionClient, isHold, isDeny } from "@inflection/sdk"
+
+const inflection = new InflectionClient({ apiKey: process.env.INFLECTION_API_KEY! })
+
+const result = await inflection.execute({
+  rail: "stripe",
+  action: "charges.create",
+  args: { amount: 5000, currency: "usd", source: "tok_visa" },
+  amount: "50.00",
+  currency: "usd",
   idempotencyKey: crypto.randomUUID(),
-  source: {
-    type: "wallet",
-    id: "1000216185",
-  },
-  destination: {
-    type: "blockchain",
-    address: "0xabc...",
-    chain: "ETH",
-  },
-  amount: {
-    amount: "100.00",
-    currency: "USD",
-  },
-})
-```
-
-### 4.3 x402
-
-The x402 rail intercepts HTTP 402 Payment Required micropayment flows. No additional peer dependency needed — the x402 client is bundled with the SDK.
-
-**Intercepted methods:**
-
-| Method | Description |
-|---|---|
-| `pay` | Pay an x402-gated resource |
-| `fetch` | Fetch a resource, paying automatically if 402 is returned |
-
-**Usage:**
-
-```typescript
-const { x402 } = inflection.rails
-
-// Explicit payment
-const receipt = await x402.pay({
-  url: "https://api.example.com/premium-endpoint",
-  amount: "0.001",
-  currency: "USDC",
-  network: "base",
 })
 
-// Auto-pay fetch (pays if 402 encountered)
-const response = await x402.fetch("https://api.example.com/data", {
-  method: "POST",
-  body: JSON.stringify({ query: "..." }),
-})
+if (isHold(result)) {
+  // Notify user or queue for retry after approval
+  console.log("Payment held, awaiting approval:", result.approvalId)
+  return { status: "pending", approvalId: result.approvalId }
+}
+
+if (isDeny(result)) {
+  // Log the denial and surface to user
+  console.error(`Payment denied by policy [${result.ruleId}]:`, result.reason)
+  return { status: "denied", reason: result.reason }
+}
+
+// ALLOW — payment processed
+console.log("Payment processed:", result.providerTxId)
 ```
 
-### 4.4 Square
+### Idempotency
 
-The Square rail wraps `square` (npm: `square`). It intercepts payment and payout operations.
-
-**Intercepted methods:**
-
-| Namespace | Intercepted Methods |
-|---|---|
-| `paymentsApi` | `createPayment` |
-| `refundsApi` | `refundPayment` |
-| `payoutsApi` | `createPayout` |
-| `invoicesApi` | `payInvoice` |
-
-**Usage:**
-
-```typescript
-const { square } = inflection.rails
-
-const { result } = await square.paymentsApi.createPayment({
-  idempotencyKey: crypto.randomUUID(),
-  sourceId: "cnon:card-nonce-ok",
-  amountMoney: {
-    amount: BigInt(1500),
-    currency: "USD",
-  },
-})
-```
-
-### 4.5 Braintree
-
-The Braintree rail wraps `braintree` (npm: `braintree`). It intercepts transaction and payout creation.
-
-**Intercepted methods:**
-
-| Namespace | Intercepted Methods |
-|---|---|
-| `transaction` | `sale`, `submitForSettlement`, `refund` |
-| `transfer` | `create` (marketplace payouts) |
-
-**Usage:**
-
-```typescript
-const { braintree } = inflection.rails
-
-const result = await braintree.transaction.sale({
-  amount: "47.00",
-  paymentMethodNonce: "nonce-from-the-client",
-  options: {
-    submitForSettlement: true,
-  },
-})
-```
-
-### 4.6 Razorpay
-
-The Razorpay rail wraps `razorpay` (npm: `razorpay`). It intercepts order creation, payouts, and refunds.
-
-**Intercepted methods:**
-
-| Namespace | Intercepted Methods |
-|---|---|
-| `orders` | `create` |
-| `payments` | `capture`, `refund` |
-| `payouts` | `create` |
-| `transfers` | `create` |
-
-**Usage:**
-
-```typescript
-const { razorpay } = inflection.rails
-
-const order = await razorpay.orders.create({
-  amount: 50000,      // paise
-  currency: "INR",
-  receipt: "order_rcptid_11",
-})
-```
-
----
-
-## 5. Execution Flow
-
-Every intercepted call follows this sequence:
-
-```
-1. Your code calls an intercepted method
-       │
-2. SDK extracts financial metadata:
-   - provider (stripe / circle / x402 / ...)
-   - method (charges.create / transfers.createTransfer / ...)
-   - amount + currency
-   - recipient identifier (if present)
-   - idempotency key (generated if not provided)
-   - agentKey
-   - timestamp (ISO 8601)
-       │
-3. SDK sends PolicyCheckRequest to Inflection gateway
-   POST https://gateway.inflection.dev/v1/check
-   Authorization: Bearer <agentKey>
-   Body: { provider, method, amount, currency, recipient, metadata, requestId }
-       │
-4. Gateway evaluates against user's policy config:
-   - Is this rail connected by the user?              → InflectionConnectorError if not
-   - Does amount exceed maxPerTransaction?            → DENY or HOLD
-   - Does amount push daily/weekly/monthly totals?   → DENY or HOLD
-   - Is the recipient blocklisted?                   → DENY
-   - Is this currency/country allowed?               → DENY
-   - Does velocity check trigger?                    → DENY or HOLD
-   - Is requireHumanApproval threshold exceeded?     → HOLD
-   - Does everything pass?                           → ALLOW
-       │
-5. Gateway returns PolicyDecision:
-   { decision: "ALLOW" | "DENY" | "HOLD", reason?, approvalId?, auditId }
-       │
-6. SDK handles decision:
-   ALLOW → forwards original call to provider SDK → returns native result
-   DENY  → throws InflectionDenyError (provider never called)
-   HOLD  → returns PendingApproval object (provider never called yet)
-```
-
-The gateway round-trip is the only added latency. In production, median gateway latency is under 50ms. The full call (gateway check + provider call) completes in gateway latency + normal provider latency.
-
-**What is sent to the gateway:**
-
-The SDK sends only financial metadata — never the full call arguments. Sensitive fields like card numbers, bank account numbers, or PII in descriptions are stripped before sending. Specifically, the gateway receives:
-
-- `provider`: the rail name
-- `method`: the method path (e.g., `charges.create`)
-- `amount`: numeric amount in the call's currency
-- `currency`: ISO 4217 currency code
-- `recipient`: hashed identifier of the recipient (if present in the call)
-- `agentKey`: your agent's key
-- `requestId`: a UUID generated per call for idempotency and audit correlation
+Calls with the same `idempotencyKey` within 24 hours return the cached response without re-evaluating policy or calling the provider. Always generate a unique idempotency key per logical operation. Never reuse keys across different payment operations.
 
 ---
 
 ## 6. Handling Decisions
 
-### 6.1 ALLOW
+### ALLOW
 
-The call proceeds to the provider. The return value is the native provider response, unchanged.
-
-```typescript
-const charge = await stripe.charges.create({
-  amount: 1000,
-  currency: "usd",
-  source: "tok_visa",
-})
-// charge is Stripe.Charge — same as calling stripe.charges.create directly
-console.log(charge.id) // ch_3abc...
-```
-
-### 6.2 DENY
-
-The provider is never called. The SDK throws `InflectionDenyError`.
+The policy passed and the provider call completed. `providerTxId` is the provider's returned transaction/object ID (e.g., Stripe charge ID, Circle transaction ID, on-chain tx hash for x402).
 
 ```typescript
-import { InflectionDenyError } from "@inflection/sdk"
-
-try {
-  const charge = await stripe.charges.create({
-    amount: 1000000,   // $10,000 — exceeds user's policy limit
-    currency: "usd",
-    source: "tok_visa",
-  })
-} catch (err) {
-  if (err instanceof InflectionDenyError) {
-    console.error("Blocked by policy:", err.message)
-    console.error("Reason code:", err.code)
-    // err.code: "EXCEEDS_TRANSACTION_LIMIT" | "DAILY_LIMIT_EXCEEDED" |
-    //           "BLOCKLISTED_RECIPIENT" | "DISALLOWED_CURRENCY" |
-    //           "DISALLOWED_COUNTRY" | "VELOCITY_EXCEEDED" | "RAIL_DISABLED"
-    console.error("Audit ID:", err.auditId)
-    // auditId links this denial to the immutable audit log entry
-  }
+if (result.outcome === "ALLOW") {
+  // record result.providerTxId in your own database
 }
 ```
 
-### 6.3 HOLD
+### DENY
 
-The provider is not called. The SDK returns a `PendingApproval<T>` object instead of the normal return type. The user is notified via their configured notification channel (Slack, email, or WhatsApp).
-
-You can resolve the hold in two ways:
-
-**Option A: Polling with `.wait()`**
+A policy rule blocked the call. The provider was never contacted. `ruleId` tells you exactly which rule fired.
 
 ```typescript
-import { isPendingApproval, InflectionDenyError } from "@inflection/sdk"
+// Deny rule IDs returned by the backend
+type DenyRuleId =
+  | "allowedRails"              // this rail is not in the agent's allowedRails list
+  | "blockedCountries"          // recipient country is blocked
+  | "blocklist"                 // recipient entity or domain is blocklisted
+  | "globalVelocityCheck"       // too many transactions in the time window
+  | "globalDailyLimit"          // agent-level daily spend exceeded
+  | "globalMonthlyLimit"        // agent-level monthly spend exceeded
+  | "connectorPolicyExists"     // connector has no policy or no allowedActions
+  | "allowedActions"            // this action is not in the connector's allowedActions
+  | "actionLimits"              // this action's per-action limit exceeded
+  | "maxPerTransaction"         // single transaction amount exceeded
+  | "allowedCountries"          // recipient country not in allowedCountries list
+  | "allowedCurrencies"         // currency not in allowedCurrencies list
+  | "scheduleWindow"            // call is outside the allowed schedule window
+  | "velocityCheck"             // connector-level velocity limit hit
+  | "dailyLimit"                // connector-level daily spend exceeded
+  | "weeklyLimit"               // connector-level weekly spend exceeded
+  | "monthlyLimit"              // connector-level monthly spend exceeded
+  | "recipientDailyLimit"       // recipient-level daily spend exceeded
+  | "execution_error"           // connector threw an error during execution
+```
 
-const result = await stripe.payouts.create({
-  amount: 500000,   // $5,000 — exceeds user's requireHumanApproval threshold
-  currency: "usd",
-})
+### HOLD
 
-if (isPendingApproval(result)) {
-  console.log("Payout is pending approval:", result.approvalId)
-  console.log("Notified via:", result.notificationChannel) // "slack" | "email" | "whatsapp"
+A policy rule requires human approval before the provider is called. An approval record is created and the developer/user is notified (via Slack or email if configured).
 
-  try {
-    // Polls until approved or rejected (default timeout: 24h)
-    const payout = await result.wait({
-      timeoutMs: 30 * 60 * 1000,   // 30 minutes
-      pollIntervalMs: 5000,         // check every 5s (default: 3000)
-    })
-    // payout is Stripe.Payout — the actual provider call completed
-    console.log("Approved! Payout ID:", payout.id)
-  } catch (err) {
-    if (err instanceof InflectionDenyError) {
-      console.log("Rejected by user:", err.message)
-    }
-  }
+```typescript
+if (result.outcome === "HOLD") {
+  const { approvalId } = result
+  // Store approvalId — user approves/rejects via the Inflection dashboard
+  // On approval, the backend re-executes the original call automatically
+  // and updates the approval status to "executed" or "execution_failed"
 }
 ```
 
-**Option B: Webhook callback with `.onApproved()`**
+**Approval lifecycle:**
 
-Use this in long-running agents or serverless environments where blocking on `.wait()` is impractical.
-
-```typescript
-if (isPendingApproval(result)) {
-  // Register a webhook URL to receive the approval result
-  await result.onApproved({
-    webhookUrl: "https://your-agent.example.com/inflection/callback",
-    // Inflection will POST the result to this URL
-    // Payload: { approvalId, decision: "APPROVED" | "REJECTED", providerResult? }
-  })
-
-  // Return the approvalId to your system so you can correlate the webhook
-  return { status: "pending", approvalId: result.approvalId }
-}
+```
+pending  ──[user approves]──►  approved  ──[backend re-executes]──►  executed
+         ──[user rejects]───►  rejected                          └──►  execution_failed
+         ──[expiresAt past]──►  expired  (swept by background worker every 60s)
 ```
 
-**Webhook payload shape:**
+**Polling approval status** (if your agent needs to wait for the outcome):
 
 ```typescript
-interface ApprovalWebhookPayload<T = unknown> {
-  approvalId: string
-  agentKey: string
-  decision: "APPROVED" | "REJECTED"
-  decidedAt: string          // ISO 8601
-  decidedBy: string          // user identifier (email)
-  providerResult?: T         // present only on APPROVED — the native provider response
-  rejectionReason?: string   // present only on REJECTED
-  auditId: string
+// Poll GET /v1/approvals/:approvalId
+const approval = await inflection.getApproval(approvalId)
+
+// approval.status: "pending" | "approved" | "rejected" | "expired" | "executed" | "execution_failed"
+if (approval.status === "executed") {
+  console.log("Approved and executed successfully")
 }
-```
-
-**Webhook verification:**
-
-```typescript
-import { verifyWebhookSignature } from "@inflection/sdk"
-
-// In your webhook handler (Express example):
-app.post("/inflection/callback", express.raw({ type: "application/json" }), (req, res) => {
-  const signature = req.headers["inflection-signature"] as string
-
-  const isValid = verifyWebhookSignature({
-    payload: req.body,
-    signature,
-    secret: process.env.INFLECTION_WEBHOOK_SECRET!,
-  })
-
-  if (!isValid) {
-    return res.status(401).send("Invalid signature")
-  }
-
-  const payload = JSON.parse(req.body.toString()) as ApprovalWebhookPayload
-  // Handle payload.decision ...
-  res.status(200).send("ok")
-})
 ```
 
 ---
 
-## 7. Error Types
+## 7. Per-Rail Action Reference
 
-All Inflection errors extend the base `InflectionError` class.
+Each connector has a rail. Only actions listed here are valid for that rail — submitting any other action string results in a policy DENY (`allowedActions` rule).
 
-### `InflectionDenyError`
+### Stripe (`rail: "stripe"`)
 
-Thrown when the gateway explicitly denies a call based on policy.
+| Action | Description | Monetary |
+|---|---|---|
+| `charges.create` | Create a charge | Yes |
+| `paymentIntents.create` | Create a payment intent | Yes |
+| `paymentIntents.confirm` | Confirm a payment intent | No |
+| `refunds.create` | Issue a refund | Yes |
+| `customers.create` | Create a customer record | No |
+| `payouts.create` | Send payout to bank account | Yes |
+| `transfers.create` | Transfer to connected account | Yes |
+
+**Supported currencies:** `usd`, `eur`, `gbp`, `aud`, `cad`, `sgd`, `jpy`, `nzd`, `chf`, `dkk`, `nok`, `sek`
+
+**Example `args` shapes:**
 
 ```typescript
-class InflectionDenyError extends InflectionError {
-  readonly name = "InflectionDenyError"
-  readonly code: DenyCode
-  readonly auditId: string       // link to immutable audit log entry
-  readonly provider: RailName
-  readonly method: string
-  readonly attemptedAmount?: number
-  readonly attemptedCurrency?: string
-}
+// charges.create
+{ amount: 5000, currency: "usd", source: "tok_visa", description?: string, customer?: string }
 
-type DenyCode =
-  | "EXCEEDS_TRANSACTION_LIMIT"
-  | "DAILY_LIMIT_EXCEEDED"
-  | "WEEKLY_LIMIT_EXCEEDED"
-  | "MONTHLY_LIMIT_EXCEEDED"
-  | "VELOCITY_EXCEEDED"
-  | "BLOCKLISTED_RECIPIENT"
-  | "DISALLOWED_CURRENCY"
-  | "DISALLOWED_COUNTRY"
-  | "RAIL_DISABLED"
-  | "AGENT_SUSPENDED"
+// paymentIntents.create
+{ amount: 5000, currency: "usd", payment_method?: string, confirm?: boolean, customer?: string }
+
+// paymentIntents.confirm
+{ id: "pi_xxx", payment_method?: string, return_url?: string }
+
+// refunds.create
+{ charge?: "ch_xxx", payment_intent?: "pi_xxx", amount?: number, reason?: string }
+
+// customers.create
+{ email?: string, name?: string, description?: string, metadata?: Record<string, string> }
+
+// payouts.create
+{ amount: 10000, currency: "usd", method?: "standard" | "instant" }
+
+// transfers.create
+{ amount: 5000, currency: "usd", destination: "acct_xxx", description?: string }
 ```
 
-### `InflectionPolicyError`
+---
 
-Thrown when the policy configuration itself is invalid or the agentKey does not map to a valid policy. This is a configuration issue, not a runtime denial.
+### Circle (`rail: "circle"`)
+
+| Action | Description | Monetary |
+|---|---|---|
+| `transfers.create` | On-chain USDC transfer from a wallet | Yes |
+| `wallets.create` | Create a user-controlled wallet | No |
+| `walletSets.create` | Create a wallet set | No |
+| `balance.get` | Get wallet token balance | No |
+
+**Supported currencies:** `usdc`, `eurc`
+
+**Example `args` shapes:**
 
 ```typescript
-class InflectionPolicyError extends InflectionError {
-  readonly name = "InflectionPolicyError"
-  readonly code: "INVALID_AGENT_KEY" | "POLICY_NOT_FOUND" | "POLICY_MISCONFIGURED"
+// transfers.create
+{
+  walletId: "1000216185",
+  tokenId: "3837386f-8d...",
+  destinationAddress: "0xabc...",
+  amount: "100.00",
+  fee?: { type: "level", config: { feeLevel: "MEDIUM" | "HIGH" | "LOW" } }
+}
+
+// wallets.create
+{ blockchain: "ETH" | "SOL" | "MATIC" | "ARB", count?: number, walletSetId: string }
+
+// walletSets.create
+{ name: string }
+
+// balance.get
+{ walletId: string }
+```
+
+---
+
+### x402 (`rail: "x402"`)
+
+| Action | Description | Monetary |
+|---|---|---|
+| `transfer` | Send USDC on Base or Base Sepolia | Yes |
+| `balanceOf` | Read USDC balance of an address | No |
+
+**Supported currencies:** `usdc`
+
+**Example `args` shapes:**
+
+```typescript
+// transfer
+{ to: "0xabc...", amount: "10.00" }   // amount in USDC, not wei
+
+// balanceOf
+{ address?: "0xabc..." }   // defaults to the connector's own address
+```
+
+---
+
+### Square (`rail: "square"`)
+
+| Action | Description | Monetary |
+|---|---|---|
+| `payments.create` | Create a payment | Yes |
+| `refunds.create` | Refund a payment | Yes |
+
+**Supported currencies:** `usd`, `eur`, `gbp`, `aud`, `cad`, `jpy`
+
+**Example `args` shapes:**
+
+```typescript
+// payments.create
+{
+  source_id: "cnon:card-nonce-ok",
+  idempotency_key: "uuid",
+  amount_money: { amount: 1500, currency: "USD" },
+  customer_id?: string,
+  note?: string
+}
+// Note: locationId is injected automatically from connector config
+
+// refunds.create
+{
+  payment_id: "xxx",
+  idempotency_key: "uuid",
+  amount_money?: { amount: 500, currency: "USD" },
+  reason?: string
 }
 ```
 
-### `InflectionConnectorError`
+---
 
-Thrown when the user has not connected the relevant payment provider to their Inflection account. The agent is configured correctly, but the user hasn't set up their Stripe (or Circle, Square, etc.) credentials in the Inflection dashboard.
+### Braintree (`rail: "braintree"`)
+
+| Action | Description | Monetary |
+|---|---|---|
+| `transactions.sale` | Create a sale transaction | Yes |
+| `transactions.refund` | Refund a transaction | Yes |
+| `transactions.void` | Void a transaction | No |
+
+**Supported currencies:** `usd`, `eur`, `gbp`, `aud`, `cad`
+
+**Example `args` shapes:**
 
 ```typescript
-class InflectionConnectorError extends InflectionError {
-  readonly name = "InflectionConnectorError"
-  readonly code: "RAIL_NOT_CONNECTED" | "CONNECTOR_REVOKED" | "CONNECTOR_EXPIRED"
-  readonly rail: RailName
-  // The message will include the dashboard URL where the user can connect their account.
+// transactions.sale
+{
+  amount: "47.00",
+  paymentMethodNonce: "nonce-from-client",
+  orderId?: string,
+  options?: { submitForSettlement: true }
 }
+
+// transactions.refund
+{ transactionId: "xxx", amount?: "20.00" }
+
+// transactions.void
+{ transactionId: "xxx" }
 ```
 
-This error is the recommended signal to surface to your agent's user with a message like: "Please connect your Stripe account in the Inflection dashboard before using payment features."
+---
 
-### `InflectionNetworkError`
+### Razorpay (`rail: "razorpay"`)
 
-Thrown when the SDK cannot reach the Inflection gateway after all retries are exhausted.
+| Action | Description | Monetary |
+|---|---|---|
+| `orders.create` | Create an order | Yes |
+| `payments.capture` | Capture an authorized payment | Yes |
+| `refunds.create` | Refund a payment | Yes |
 
-```typescript
-class InflectionNetworkError extends InflectionError {
-  readonly name = "InflectionNetworkError"
-  readonly code: "GATEWAY_UNREACHABLE" | "GATEWAY_TIMEOUT" | "GATEWAY_ERROR"
-  readonly statusCode?: number   // HTTP status from gateway, if received
-  readonly requestId: string     // for support correlation
-}
-```
+**Supported currencies:** `inr`, `usd`
 
-**Important:** When a `InflectionNetworkError` is thrown, the provider call has NOT been made. The error means the policy check could not complete — the SDK does not fall through to the provider on gateway failure. This is intentional: failing open would defeat the compliance guarantee.
-
-### `InflectionApprovalTimeoutError`
-
-Thrown by `PendingApproval.wait()` when the timeout expires before the user approves or rejects.
+**Example `args` shapes:**
 
 ```typescript
-class InflectionApprovalTimeoutError extends InflectionError {
-  readonly name = "InflectionApprovalTimeoutError"
-  readonly approvalId: string
-  // The approval is still pending — not cancelled.
-  // You can resume polling with a new .wait() call using the same approvalId.
-}
-```
+// orders.create
+{ amount: 50000, currency: "INR", receipt?: string, notes?: Record<string, string> }
+// amount is in paise (1 INR = 100 paise)
 
-### Base class
+// payments.capture
+{ paymentId: "pay_xxx", amount: 50000, currency: "INR" }
 
-```typescript
-class InflectionError extends Error {
-  readonly name: string
-  readonly message: string
-  readonly requestId: string    // UUID for support — include in bug reports
-  readonly timestamp: string    // ISO 8601
-}
+// refunds.create
+{ paymentId: "pay_xxx", amount?: 25000, notes?: Record<string, string> }
 ```
 
 ---
@@ -678,296 +497,369 @@ class InflectionError extends Error {
 ### Core types
 
 ```typescript
-// Rail names
-type RailName = "stripe" | "circle" | "x402" | "square" | "braintree" | "razorpay"
+export type Rail = "stripe" | "circle" | "x402" | "square" | "braintree" | "razorpay"
 
-// The main SDK class
-interface InflectionOptions {
-  agentKey: string
-  options?: {
-    timeout?: number
-    retryConfig?: RetryConfig
-    baseUrl?: string
-    logLevel?: "debug" | "info" | "warn" | "error" | "silent"
-  }
+export interface ExecuteRequest {
+  rail: Rail
+  action: string
+  args: Record<string, unknown>
+  amount?: string
+  currency?: string
+  idempotencyKey: string
+  recipientId?: string
+  recipientCountry?: string
+  recipientEntity?: string
+  recipientDomain?: string
 }
 
-interface RetryConfig {
-  maxRetries?: number           // default: 2
-  initialDelayMs?: number       // default: 100
-  backoffMultiplier?: number    // default: 2
-  retryableStatuses?: number[]  // default: [429, 502, 503, 504]
+export type ExecuteResponse = AllowResponse | DenyResponse | HoldResponse
+
+export interface AllowResponse {
+  outcome: "ALLOW"
+  providerTxId?: string
+  durationMs: number
 }
 
-// Rail client accessor
-interface InflectionRails {
-  stripe: InflectionStripeClient
-  circle: InflectionCircleClient
-  x402: InflectionX402Client
-  square: InflectionSquareClient
-  braintree: InflectionBraintreeClient
-  razorpay: InflectionRazorpayClient
+export interface DenyResponse {
+  outcome: "DENY"
+  reason: string
+  ruleId: string
+  durationMs: number
+}
+
+export interface HoldResponse {
+  outcome: "HOLD"
+  approvalId: string
+  reason: string
+  durationMs: number
 }
 ```
 
-### PendingApproval
+### Resource types
 
 ```typescript
-interface PendingApproval<T> {
-  /** Unique ID for this approval request */
-  readonly approvalId: string
-
-  /** How the user was notified */
-  readonly notificationChannel: "slack" | "email" | "whatsapp"
-
-  /** When the hold was created */
-  readonly createdAt: string   // ISO 8601
-
-  /** Audit log ID for this held action */
-  readonly auditId: string
-
-  /**
-   * Poll until the user approves or rejects.
-   * Returns the native provider result on approval.
-   * Throws InflectionDenyError if rejected.
-   * Throws InflectionApprovalTimeoutError if timeoutMs is exceeded.
-   */
-  wait(options?: WaitOptions): Promise<T>
-
-  /**
-   * Register a webhook to receive the approval decision.
-   * The provider call is made by Inflection on approval.
-   */
-  onApproved(options: OnApprovedOptions): Promise<void>
+export interface Agent {
+  id: string
+  developerId: string
+  name: string
+  description: string | null
+  webhookUrl: string | null
+  status: "active" | "suspended" | "deleted"
+  createdAt: string
+  updatedAt: string
 }
 
-interface WaitOptions {
-  timeoutMs?: number         // default: 86_400_000 (24h)
-  pollIntervalMs?: number    // default: 3000
+export interface Connector {
+  id: string
+  agentId: string
+  userId: string
+  rail: Rail
+  authType: "oauth" | "api_key" | "wallet"
+  maskedCredential: string
+  status: "active" | "revoked" | "error"
+  createdAt: string
+  updatedAt: string
 }
 
-interface OnApprovedOptions {
-  webhookUrl: string
+export interface AgentPolicy {
+  id: string
+  agentId: string
+  userId: string
+  version: number
+  rules: AgentPolicyRules
+  createdBy: string
+  createdAt: string
 }
 
-// Type guard
-function isPendingApproval<T>(value: T | PendingApproval<T>): value is PendingApproval<T>
+export interface ConnectorPolicy {
+  id: string
+  connectorId: string
+  userId: string
+  version: number
+  rules: ConnectorPolicyRules
+  createdBy: string
+  createdAt: string
+}
+
+export interface AuditLog {
+  id: string
+  agentId: string
+  userId: string
+  connectorId: string | null
+  rail: string
+  action: string
+  outcome: "ALLOW" | "DENY" | "HOLD"
+  denyRule: string | null
+  amount: string | null
+  currency: string | null
+  recipientId: string | null
+  policyId: string | null
+  connectorPolicyId: string | null
+  argsHash: string | null
+  providerTxId: string | null
+  approvalId: string | null
+  durationMs: number | null
+  prevHash: string
+  rowHash: string
+  createdAt: string
+}
+
+export interface Approval {
+  id: string
+  agentId: string
+  userId: string
+  auditLogId: string | null
+  argsSnapshot: string          // JSON-encoded sanitized args
+  amount: string | null
+  currency: string | null
+  status: "pending" | "approved" | "rejected" | "expired" | "executed" | "execution_failed"
+  approvedBy: string | null
+  rejectionReason: string | null
+  expiresAt: string
+  resolvedAt: string | null
+  createdAt: string
+}
 ```
 
-### Policy decision (internal, exposed for advanced use)
+### Policy rule shapes
 
 ```typescript
-type PolicyDecision =
-  | { decision: "ALLOW"; auditId: string }
-  | { decision: "DENY"; reason: string; code: DenyCode; auditId: string }
-  | { decision: "HOLD"; approvalId: string; notificationChannel: string; auditId: string }
-```
-
-### Webhook verification
-
-```typescript
-interface VerifyWebhookSignatureOptions {
-  payload: Buffer | string
-  signature: string
-  secret: string
+export interface AgentPolicyRules {
+  allowedRails?: Rail[]
+  blockedCountries?: string[]                   // ISO 3166-1 alpha-2
+  blocklist?: {
+    entities?: string[]
+    domains?: string[]
+  }
+  globalVelocityCheck?: {
+    maxTransactions: number
+    windowSeconds: number
+  }
+  globalDailyLimit?: { amount: string; currency: string }
+  globalMonthlyLimit?: { amount: string; currency: string }
 }
 
-function verifyWebhookSignature(options: VerifyWebhookSignatureOptions): boolean
+export interface ActionLimit {
+  action: string
+  maxAmount: string
+  currency: string
+}
+
+export interface ConnectorPolicyRules {
+  allowedActions?: string[]                     // must be valid actions for the connector's rail
+  actionLimits?: ActionLimit[]
+  maxPerTransaction?: { amount: string; currency: string }
+  blockedCountries?: string[]
+  allowedCountries?: string[]
+  allowedCurrencies?: string[]
+  scheduleWindow?: {
+    daysOfWeek: number[]                        // 0=Sun .. 6=Sat
+    startHourUtc: number                        // 0–23
+    endHourUtc: number                          // 0–23
+  }
+  velocityCheck?: { maxTransactions: number; windowSeconds: number }
+  dailyLimit?: { amount: string; currency: string }
+  weeklyLimit?: { amount: string; currency: string }
+  monthlyLimit?: { amount: string; currency: string }
+  recipientDailyLimit?: { amount: string; currency: string }
+  requireHumanApproval?: { above: number; currency: string }
+}
 ```
 
-### Stripe rail client (illustrative — mirrors native Stripe SDK types)
+### Type guards
 
 ```typescript
-interface InflectionStripeClient {
-  charges: {
-    create(params: Stripe.ChargeCreateParams): Promise<Stripe.Charge | PendingApproval<Stripe.Charge>>
-  }
-  paymentIntents: {
-    create(params: Stripe.PaymentIntentCreateParams): Promise<Stripe.PaymentIntent | PendingApproval<Stripe.PaymentIntent>>
-    confirm(id: string, params?: Stripe.PaymentIntentConfirmParams): Promise<Stripe.PaymentIntent | PendingApproval<Stripe.PaymentIntent>>
-    capture(id: string, params?: Stripe.PaymentIntentCaptureParams): Promise<Stripe.PaymentIntent | PendingApproval<Stripe.PaymentIntent>>
-  }
-  refunds: {
-    create(params: Stripe.RefundCreateParams): Promise<Stripe.Refund | PendingApproval<Stripe.Refund>>
-  }
-  transfers: {
-    create(params: Stripe.TransferCreateParams): Promise<Stripe.Transfer | PendingApproval<Stripe.Transfer>>
-  }
-  payouts: {
-    create(params: Stripe.PayoutCreateParams): Promise<Stripe.Payout | PendingApproval<Stripe.Payout>>
-  }
-  // Non-intercepted methods delegate to native Stripe client
-  customers: Stripe["customers"]
-  paymentMethods: Stripe["paymentMethods"]
-  // ... (all other non-financial namespaces pass through)
-}
+export function isAllow(r: ExecuteResponse): r is AllowResponse
+export function isDeny(r: ExecuteResponse): r is DenyResponse
+export function isHold(r: ExecuteResponse): r is HoldResponse
 ```
 
 ---
 
-## 9. Configuration Reference
+## 9. Per-Rail Helpers (Optional)
 
-### `InflectionOptions`
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `agentKey` | `string` | Yes | — | Agent key from the Inflection dashboard. Use `ak_live_` prefix in production, `ak_test_` in sandbox. |
-| `options.timeout` | `number` | No | `10000` | Gateway request timeout in milliseconds. |
-| `options.retryConfig.maxRetries` | `number` | No | `2` | Maximum retry attempts on retriable gateway errors. |
-| `options.retryConfig.initialDelayMs` | `number` | No | `100` | Initial retry backoff delay. |
-| `options.retryConfig.backoffMultiplier` | `number` | No | `2` | Exponential backoff multiplier. |
-| `options.retryConfig.retryableStatuses` | `number[]` | No | `[429,502,503,504]` | HTTP status codes that trigger a retry. |
-| `options.baseUrl` | `string` | No | `https://gateway.inflection.dev` | Override for self-hosted Inflection deployments. |
-| `options.logLevel` | `string` | No | `"warn"` | SDK internal log verbosity. Set to `"debug"` during development. |
-
-### Environment variable support
-
-The SDK reads the following environment variables if the corresponding option is not passed:
-
-| Variable | Maps to |
-|---|---|
-| `INFLECTION_AGENT_KEY` | `agentKey` |
-| `INFLECTION_BASE_URL` | `options.baseUrl` |
-| `INFLECTION_LOG_LEVEL` | `options.logLevel` |
+The SDK exposes per-rail namespaces as thin wrappers over `execute()`. These are optional — they just pre-fill `action` and provide typed `args`, so you get autocomplete without writing raw JSON.
 
 ```typescript
-// These are equivalent:
-const inflection = new Inflection({ agentKey: "ak_live_..." })
+// Instead of:
+await inflection.execute({
+  rail: "stripe",
+  action: "charges.create",
+  args: { amount: 5000, currency: "usd", source: "tok_visa" },
+  amount: "50.00",
+  currency: "usd",
+  idempotencyKey: key,
+})
 
-// If INFLECTION_AGENT_KEY env var is set:
-const inflection = new Inflection({})
+// You can write:
+await inflection.stripe.charges.create({
+  amount: 5000,
+  currency: "usd",
+  source: "tok_visa",
+  idempotencyKey: key,
+})
+```
+
+Each per-rail helper extracts `amount` and `currency` from the args automatically, so you don't duplicate them. No connector ID needed — the backend resolves the active connector for the agent's configured rail.
+
+### Stripe helper
+
+```typescript
+await inflection.stripe.charges.create({ amount, currency, source, description?, customer?, idempotencyKey })
+await inflection.stripe.paymentIntents.create({ amount, currency, payment_method?, confirm?, idempotencyKey })
+await inflection.stripe.paymentIntents.confirm({ id, payment_method?, idempotencyKey })
+await inflection.stripe.refunds.create({ charge?, payment_intent?, amount?, reason?, idempotencyKey })
+await inflection.stripe.customers.create({ email?, name?, description?, idempotencyKey })
+await inflection.stripe.payouts.create({ amount, currency, method?, idempotencyKey })
+await inflection.stripe.transfers.create({ amount, currency, destination, idempotencyKey })
+```
+
+### Circle helper
+
+```typescript
+await inflection.circle.transfers.create({ walletId, tokenId, destinationAddress, amount, fee?, idempotencyKey })
+await inflection.circle.wallets.create({ blockchain, walletSetId, count?, idempotencyKey })
+await inflection.circle.walletSets.create({ name, idempotencyKey })
+await inflection.circle.balance.get({ walletId, idempotencyKey })
+```
+
+### x402 helper
+
+```typescript
+await inflection.x402.transfer({ to, amount, idempotencyKey })
+await inflection.x402.balanceOf({ address?, idempotencyKey })
+```
+
+### Square helper
+
+```typescript
+await inflection.square.payments.create({ source_id, amount_money, customer_id?, note?, idempotencyKey })
+await inflection.square.refunds.create({ payment_id, amount_money?, reason?, idempotencyKey })
+```
+
+### Braintree helper
+
+```typescript
+await inflection.braintree.transactions.sale({ amount, paymentMethodNonce, orderId?, options?, idempotencyKey })
+await inflection.braintree.transactions.refund({ transactionId, amount?, idempotencyKey })
+await inflection.braintree.transactions.void({ transactionId, idempotencyKey })
+```
+
+### Razorpay helper
+
+```typescript
+await inflection.razorpay.orders.create({ amount, currency, receipt?, notes?, idempotencyKey })
+await inflection.razorpay.payments.capture({ paymentId, amount, currency, idempotencyKey })
+await inflection.razorpay.refunds.create({ paymentId, amount?, notes?, idempotencyKey })
 ```
 
 ---
 
-## 10. Testing and Sandbox Mode
-
-Use a test agent key (`ak_test_...`) to run in sandbox mode. In sandbox mode:
-
-- The Inflection gateway runs against a shadow policy (not the user's live policy)
-- No actual calls are made to payment providers — all provider responses are mocked
-- Audit logs go to a separate sandbox log view in the dashboard
-- HOLD decisions can be approved/rejected via the dashboard sandbox approvals queue
-
-### Getting a test key
-
-Every agent on the Inflection dashboard has both a live key (`ak_live_...`) and a test key (`ak_test_...`). Use the test key in your CI and local development.
+## 10. Exported Constants
 
 ```typescript
-const inflection = new Inflection({
-  agentKey: process.env.INFLECTION_AGENT_KEY!,
-  // In test environments, INFLECTION_AGENT_KEY should be set to ak_test_...
-})
+import { ACTIONS_BY_RAIL, CURRENCIES_BY_RAIL, MONETARY_ACTIONS_BY_RAIL } from "@inflection/sdk"
+
+// All valid action strings per rail
+ACTIONS_BY_RAIL["stripe"]
+// ["charges.create", "paymentIntents.create", "paymentIntents.confirm",
+//  "refunds.create", "customers.create", "payouts.create", "transfers.create"]
+
+ACTIONS_BY_RAIL["circle"]     // ["transfers.create", "wallets.create", "walletSets.create", "balance.get"]
+ACTIONS_BY_RAIL["x402"]       // ["transfer", "balanceOf"]
+ACTIONS_BY_RAIL["square"]     // ["payments.create", "refunds.create"]
+ACTIONS_BY_RAIL["braintree"]  // ["transactions.sale", "transactions.refund", "transactions.void"]
+ACTIONS_BY_RAIL["razorpay"]   // ["orders.create", "payments.capture", "refunds.create"]
+
+// Valid currencies per rail
+CURRENCIES_BY_RAIL["stripe"]    // ["usd", "eur", "gbp", "aud", "cad", "sgd", "jpy", "nzd", "chf", "dkk", "nok", "sek"]
+CURRENCIES_BY_RAIL["circle"]    // ["usdc", "eurc"]
+CURRENCIES_BY_RAIL["x402"]      // ["usdc"]
+CURRENCIES_BY_RAIL["square"]    // ["usd", "eur", "gbp", "aud", "cad", "jpy"]
+CURRENCIES_BY_RAIL["braintree"] // ["usd", "eur", "gbp", "aud", "cad"]
+CURRENCIES_BY_RAIL["razorpay"]  // ["inr", "usd"]
+
+// Actions that carry a monetary amount (triggers spend counters and limits)
+MONETARY_ACTIONS_BY_RAIL["stripe"]
+// ["charges.create", "paymentIntents.create", "refunds.create", "payouts.create", "transfers.create"]
 ```
 
-### Simulating decisions in tests
+These constants are kept in sync with the backend's action registry (`src/connectors/action-registry.ts`). Use them in agents to validate actions at build time and in dashboards to render action selectors.
 
-In sandbox mode, specific amount values trigger specific gateway responses, letting you test all code paths without setting up complex policies:
+---
 
-| Amount (any currency) | Simulated decision |
-|---|---|
-| `1.00` | ALLOW |
-| `2.00` | DENY (EXCEEDS_TRANSACTION_LIMIT) |
-| `3.00` | HOLD |
-| `4.00` | DENY (BLOCKLISTED_RECIPIENT) |
-| `5.00` | InflectionConnectorError (RAIL_NOT_CONNECTED) |
-| Any other | ALLOW |
+## 11. Error Types
 
 ```typescript
-// Jest example
-import { Inflection, InflectionDenyError, isPendingApproval } from "@inflection/sdk"
+export class InflectionError extends Error {
+  readonly requestId: string    // include in bug reports
+}
 
-const inflection = new Inflection({ agentKey: "ak_test_sandbox" })
-const { stripe } = inflection.rails
+// HTTP 4xx/5xx from the backend (not a policy decision)
+export class InflectionHttpError extends InflectionError {
+  readonly status: number
+  readonly body: unknown
+}
 
-test("handles DENY correctly", async () => {
-  await expect(
-    stripe.charges.create({ amount: 200, currency: "usd", source: "tok_visa" })
-    // amount: 200 cents = $2.00 → triggers simulated DENY
-  ).rejects.toThrow(InflectionDenyError)
-})
-
-test("handles HOLD correctly", async () => {
-  const result = await stripe.charges.create({
-    amount: 300,    // $3.00 → triggers simulated HOLD
-    currency: "usd",
-    source: "tok_visa",
-  })
-  expect(isPendingApproval(result)).toBe(true)
-})
+// Network failure — backend unreachable after timeout
+export class InflectionNetworkError extends InflectionError {
+  readonly cause?: Error
+}
 ```
+
+The SDK does **not** throw on DENY or HOLD — those are returned as normal response objects so you can handle them in your control flow. Only genuine HTTP errors and network failures throw.
+
+---
+
+## 12. Testing
+
+### Test mode
+
+Create a test-mode API key in the dashboard (`infl_test_...`). Test keys use a separate connector record that hits Stripe's test API (or other provider sandboxes), not production. Audit logs and approvals from test keys appear in a separate test view in the dashboard.
 
 ### Unit testing without network
 
-Use the `MockInflection` test helper to avoid any network calls in unit tests:
+The SDK exports a `createMockClient()` factory for unit tests:
 
 ```typescript
-import { MockInflection } from "@inflection/sdk/testing"
+import { createMockClient } from "@inflection/sdk/testing"
 
-const mock = new MockInflection()
+const inflection = createMockClient({
+  // Default all execute() calls to ALLOW
+  defaultOutcome: "ALLOW",
+  // Override specific action+connectorId combos
+  overrides: [
+    {
+      rail: "stripe",
+      action: "payouts.create",
+      response: { outcome: "HOLD", approvalId: "appr_test_1", reason: "HOLD_HUMAN_APPROVAL_REQUIRED", durationMs: 12 },
+    },
+  ],
+})
 
-// Configure per-method responses
-mock.stripe.charges.create.mockResolvedValue({
-  id: "ch_test_123",
-  amount: 5000,
-  currency: "usd",
-  status: "succeeded",
-  // ... rest of Stripe.Charge shape
-} as Stripe.Charge)
-
-// Use mock in your agent under test
-const agent = new BillingAgent({ inflection: mock })
-await agent.chargeCustomer({ customerId: "cus_test", amountCents: 5000 })
-expect(mock.stripe.charges.create).toHaveBeenCalledWith(
-  expect.objectContaining({ amount: 5000 })
-)
+// inflection.execute() returns the configured mock response
+// inflection.calls — array of all execute() calls made, for assertions
 ```
 
----
+### Integration test pattern
 
-## 11. Security Considerations
+```typescript
+import { InflectionClient } from "@inflection/sdk"
 
-### Agent key handling
+const inflection = new InflectionClient({
+  apiKey: process.env.INFLECTION_TEST_API_KEY!,   // infl_test_...
+  baseUrl: "http://localhost:3001",
+})
 
-- **Never log your agentKey.** The SDK will warn (at `logLevel: "warn"`) if it detects the agentKey appears in any string you pass to it (e.g., accidentally in a description field).
-- **Never expose agentKey to client-side code.** The agentKey is a server-side credential. It should always be read from an environment variable, never hardcoded.
-- **Rotate keys immediately if compromised.** The Inflection dashboard allows key rotation. Rotating a key invalidates the old key within seconds.
-- The agentKey does not grant access to the user's payment provider credentials — it only grants the ability to request policy checks. Even a leaked agentKey cannot move money without the user's policies allowing it.
-
-### What data is sent to the Inflection gateway
-
-The SDK sends only structured financial metadata to the gateway. It does NOT send:
-
-- Full call arguments (no card numbers, bank accounts, or raw PII)
-- The provider's API key or credentials
-- IP addresses of your users
-- Any data not directly needed for policy evaluation
-
-Specifically, the gateway receives for each call:
-
-```json
-{
-  "agentKey": "ak_live_...",
-  "provider": "stripe",
-  "method": "charges.create",
-  "amount": 5000,
-  "currency": "usd",
-  "recipient": "sha256:<hashed-recipient-id>",
-  "requestId": "req_9abc...",
-  "timestamp": "2026-05-11T10:32:00.000Z"
-}
+test("stripe charge returns ALLOW in test mode", async () => {
+  const result = await inflection.execute({
+    rail: "stripe",
+    action: "charges.create",
+    args: { amount: 100, currency: "usd", source: "tok_visa" },
+    amount: "1.00",
+    currency: "usd",
+    idempotencyKey: crypto.randomUUID(),
+  })
+  expect(result.outcome).toBe("ALLOW")
+})
 ```
-
-### Tamper-evident audit log
-
-Every intercepted call — allowed, denied, or held — is recorded in the audit log with a cryptographic hash chain. Entries cannot be deleted or modified. The `auditId` returned on every decision can be used to look up the exact record.
-
-### Gateway failure behavior
-
-The SDK does **not** fail open. If the gateway is unreachable after all retries, the call is blocked and `InflectionNetworkError` is thrown. This guarantees that financial calls cannot bypass policy enforcement due to a transient network issue.
-
-If your use case requires fail-open behavior (not recommended for financial operations), you can catch `InflectionNetworkError` explicitly and make the provider call using the native SDK directly — but this will not be logged in the Inflection audit trail.
-
-### TLS and request integrity
-
-All gateway communication uses TLS 1.3. Requests are signed with HMAC-SHA256 using a derived key so the gateway can verify they originated from the SDK and not a replay attack.

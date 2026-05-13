@@ -6,6 +6,8 @@ import { agents, connectors, agentPolicies, connectorPolicies } from "../db/sche
 import { jwtAuth } from "../middleware/auth";
 import { newId } from "../lib/auth";
 import { policyCache } from "../policy-engine";
+import { validateConnectorPolicyRules } from "../connectors/action-registry";
+import type { Rail } from "../policy-engine";
 
 const router = new Hono();
 router.use("*", jwtAuth);
@@ -100,11 +102,14 @@ router.post("/connectors/:connectorId/policies", async (c) => {
   if (!rules) throw new HTTPException(400, { message: "rules is required" });
 
   const [conn] = await db
-    .select({ id: connectors.id })
+    .select({ id: connectors.id, rail: connectors.rail })
     .from(connectors)
     .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
     .limit(1);
   if (!conn) throw new HTTPException(404, { message: "Connector not found" });
+
+  const validationError = validateConnectorPolicyRules(conn.rail as Rail, rules as any);
+  if (validationError) throw new HTTPException(400, { message: validationError });
 
   const [lastRow] = await db
     .select({ version: connectorPolicies.version })

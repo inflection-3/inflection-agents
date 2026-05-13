@@ -12,15 +12,10 @@
 
 import { generateText, tool } from "ai";
 import { z } from "zod";
-import { Client, Environment } from "square";
+import { square } from "@square/square";
 import crypto from "crypto";
 import { model, logStep } from "../config.js";
 import "dotenv/config";
-
-const square = new Client({
-  environment: Environment.Sandbox,
-  accessToken: process.env.SQUARE_SANDBOX_TOKEN!,
-});
 
 // Simulated inventory — in production this would come from a POS/WMS system
 const INVENTORY = [

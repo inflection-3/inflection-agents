@@ -69,6 +69,33 @@ router.post("/", async (c) => {
     ? `${firstVal.slice(0, 8)}****`
     : `${firstVal.slice(0, 4)}****`;
 
+  // Check if a connector already exists for this (agent, rail, user) combo
+  const [existing] = await db
+    .select({ id: connectors.id, status: connectors.status })
+    .from(connectors)
+    .where(and(eq(connectors.agentId, agentId), eq(connectors.rail, rail as Rail), eq(connectors.userId, userId)))
+    .limit(1);
+
+  if (existing) {
+    if (existing.status === "active") {
+      throw new HTTPException(409, { message: `A ${rail} connector is already active for this agent. Revoke it first before reconnecting.` });
+    }
+    // Re-activate with new credentials
+    await db.update(connectors).set({
+      authType: authType as (typeof AUTH_TYPES)[number],
+      credentialsEncrypted: ciphertext,
+      credentialsIv: iv,
+      credentialsKeyId: keyId,
+      maskedCredential,
+      status: "active",
+      updatedAt: new Date(),
+    }).where(eq(connectors.id, existing.id));
+    invalidateConnectorCache(existing.id);
+
+    const [row] = await db.select(SELECTED_COLS).from(connectors).where(eq(connectors.id, existing.id)).limit(1);
+    return c.json(row, 200);
+  }
+
   const id = newId();
   await db.insert(connectors).values({
     id,

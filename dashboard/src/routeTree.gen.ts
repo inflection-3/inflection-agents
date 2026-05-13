@@ -10,8 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as RegisterRouteImport } from './routes/register'
 import { Route as PoliciesRouteImport } from './routes/policies'
 import { Route as NotificationsRouteImport } from './routes/notifications'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as ConnectorsRouteImport } from './routes/connectors'
 import { Route as AuditLogsRouteImport } from './routes/audit-logs'
 import { Route as ApprovalsRouteImport } from './routes/approvals'
@@ -24,6 +26,11 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PoliciesRoute = PoliciesRouteImport.update({
   id: '/policies',
   path: '/policies',
@@ -32,6 +39,11 @@ const PoliciesRoute = PoliciesRouteImport.update({
 const NotificationsRoute = NotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectorsRoute = ConnectorsRouteImport.update({
@@ -72,8 +84,10 @@ export interface FileRoutesByFullPath {
   '/approvals': typeof ApprovalsRoute
   '/audit-logs': typeof AuditLogsRoute
   '/connectors': typeof ConnectorsRoute
+  '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/policies': typeof PoliciesRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
@@ -83,8 +97,10 @@ export interface FileRoutesByTo {
   '/approvals': typeof ApprovalsRoute
   '/audit-logs': typeof AuditLogsRoute
   '/connectors': typeof ConnectorsRoute
+  '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/policies': typeof PoliciesRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
@@ -95,8 +111,10 @@ export interface FileRoutesById {
   '/approvals': typeof ApprovalsRoute
   '/audit-logs': typeof AuditLogsRoute
   '/connectors': typeof ConnectorsRoute
+  '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/policies': typeof PoliciesRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
@@ -108,8 +126,10 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/audit-logs'
     | '/connectors'
+    | '/login'
     | '/notifications'
     | '/policies'
+    | '/register'
     | '/settings'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -119,8 +139,10 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/audit-logs'
     | '/connectors'
+    | '/login'
     | '/notifications'
     | '/policies'
+    | '/register'
     | '/settings'
   id:
     | '__root__'
@@ -130,8 +152,10 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/audit-logs'
     | '/connectors'
+    | '/login'
     | '/notifications'
     | '/policies'
+    | '/register'
     | '/settings'
   fileRoutesById: FileRoutesById
 }
@@ -142,8 +166,10 @@ export interface RootRouteChildren {
   ApprovalsRoute: typeof ApprovalsRoute
   AuditLogsRoute: typeof AuditLogsRoute
   ConnectorsRoute: typeof ConnectorsRoute
+  LoginRoute: typeof LoginRoute
   NotificationsRoute: typeof NotificationsRoute
   PoliciesRoute: typeof PoliciesRoute
+  RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRoute
 }
 
@@ -154,6 +180,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/policies': {
@@ -168,6 +201,13 @@ declare module '@tanstack/react-router' {
       path: '/notifications'
       fullPath: '/notifications'
       preLoaderRoute: typeof NotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connectors': {
@@ -222,8 +262,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApprovalsRoute: ApprovalsRoute,
   AuditLogsRoute: AuditLogsRoute,
   ConnectorsRoute: ConnectorsRoute,
+  LoginRoute: LoginRoute,
   NotificationsRoute: NotificationsRoute,
   PoliciesRoute: PoliciesRoute,
+  RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport

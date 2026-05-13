@@ -21,7 +21,7 @@ export interface Connector {
 // ─── Credential shapes (decrypted JSON) ──────────────────────────────────────
 
 export interface StripeCreds {
-  accessToken: string;
+  apiKey: string;
   refreshToken?: string;
 }
 

@@ -51,7 +51,7 @@ export interface ConnectorPolicyRules {
   weeklyLimit?: { amount: string; currency: string };
   monthlyLimit?: { amount: string; currency: string };
   recipientDailyLimit?: { amount: string; currency: string };
-  requireHumanApproval?: { thresholdAmount: string; currency: string };
+  requireHumanApproval?: { above: number; currency: string };
 }
 
 export interface EvaluateContext {
@@ -497,7 +497,7 @@ export function evalRequireHumanApproval(
   rules: ConnectorPolicyRules
 ): PolicyDecision | null {
   if (!rules.requireHumanApproval) return null;
-  if (parseFloat(amount) >= parseFloat(rules.requireHumanApproval.thresholdAmount)) {
+  if (parseFloat(amount) >= rules.requireHumanApproval.above) {
     return {
       decision: "HOLD",
       reason: "HOLD_HUMAN_APPROVAL_REQUIRED",

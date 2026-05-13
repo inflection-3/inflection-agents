@@ -6,7 +6,7 @@ export class StripeConnector implements Connector {
   private client: Stripe;
 
   constructor(private creds: StripeCreds) {
-    this.client = new Stripe(creds.accessToken);
+    this.client = new Stripe(creds.apiKey);
   }
 
   async validate(): Promise<void> {

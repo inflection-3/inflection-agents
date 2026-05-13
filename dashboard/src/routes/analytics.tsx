@@ -1,4 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
+import { Area, AreaChart, Bar, BarChart, Cell, Pie, PieChart, XAxis, YAxis } from "recharts"
+import { CheckCircle, DollarSign, TrendingUp } from "lucide-react"
+import type {ChartConfig} from "@/components/ui/chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
@@ -15,11 +18,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import {  ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
-import { dailySpend, txByRail, txByOutcome, topActions } from "@/lib/data"
-import { BarChart, Bar, XAxis, YAxis, PieChart, Pie, Cell, AreaChart, Area } from "recharts"
-import { DollarSign, TrendingUp, CheckCircle } from "lucide-react"
+import { dailySpend, topActions, txByOutcome, txByRail } from "@/lib/data"
 
 export const Route = createFileRoute("/analytics")({ component: AnalyticsPage })
 

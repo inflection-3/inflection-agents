@@ -1,7 +1,7 @@
 "use client"
 
-import { type Icon } from "@tabler/icons-react"
 import { useLocation } from "@tanstack/react-router"
+import type {Icon} from "@tabler/icons-react";
 
 import {
   SidebarGroup,
@@ -14,11 +14,11 @@ import {
 export function NavMain({
   items,
 }: {
-  items: {
+  items: Array<{
     title: string
     url: string
     icon?: Icon
-  }[]
+  }>
 }) {
   const location = useLocation()
 
